@@ -1,4 +1,4 @@
-import { PDFParse } from "pdf-parse";
+import pdf from "pdf-parse";
 import { EMPTY_INVOICE, completeResult, firstAmount, firstMatch, parseCurrency, parseDate, parseVat } from "@/lib/suppliers/common";
 import { supplierParsers } from "@/lib/suppliers";
 import type { ParsedInvoice, SupplierParserResult } from "@/lib/types";
@@ -6,13 +6,8 @@ import type { ParsedInvoice, SupplierParserResult } from "@/lib/types";
 let parseIndex = 0;
 
 export async function extractTextFromPdf(buffer: Buffer) {
-  const parser = new PDFParse({ data: new Uint8Array(buffer) });
-  try {
-    const result = await parser.getText();
-    return result.text.replace(/\u00a0/g, " ").trim();
-  } finally {
-    await parser.destroy();
-  }
+  const result = await pdf(buffer);
+  return result.text.replace(/\u00a0/g, " ").trim();
 }
 
 export async function parseInvoicePdf(buffer: Buffer, fileName: string): Promise<ParsedInvoice> {
