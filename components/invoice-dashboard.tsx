@@ -164,10 +164,21 @@ export function InvoiceDashboard() {
               dell&apos;integrazione Fatture in Cloud.
             </p>
           </div>
-          <div className="grid grid-cols-3 gap-3 text-sm">
-            <Metric label="Fatture" value={String(enrichedInvoices.length)} />
-            <Metric label="Approvate" value={`${approvedCount}/${enrichedInvoices.length}`} />
-            <Metric label="Totale" value={formatMoney(globalTotal)} />
+          <div className="flex flex-col gap-3 lg:items-end">
+            <div className="grid grid-cols-3 gap-3 text-sm">
+              <Metric label="Fatture" value={String(enrichedInvoices.length)} />
+              <Metric label="Approvate" value={`${approvedCount}/${enrichedInvoices.length}`} />
+              <Metric label="Totale" value={formatMoney(globalTotal)} />
+            </div>
+            <form action="/api/auth/logout" method="post">
+              <button
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-medium hover:bg-slate-50"
+                type="submit"
+              >
+                <LogOut size={16} />
+                Esci
+              </button>
+            </form>
           </div>
         </header>
 
