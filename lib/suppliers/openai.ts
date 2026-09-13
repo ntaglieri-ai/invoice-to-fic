@@ -33,10 +33,10 @@ export const openAiParser: SupplierParser = {
 
 function parseOpenAiInvoiceNumber(text: string) {
   const invoiceNumber = firstMatch(text, [
-    /Invoice\s+number\s*[:#]?\s*([A-Z0-9]+(?:\s*-\s*[A-Z0-9]+)*)/i,
-    /Invoice\s+#\s*([A-Z0-9]+(?:\s*-\s*[A-Z0-9]+)*)/i,
-    /Receipt\s+(?:number|#)\s*[:#]?\s*([A-Z0-9]+(?:\s*-\s*[A-Z0-9]+)*)/i,
+    /Invoice\s+number\s*[:#]?\s*([A-Z0-9]+(?:\s*(?:-|\u0000)\s*[A-Z0-9]+)*)/i,
+    /Invoice\s+#\s*([A-Z0-9]+(?:\s*(?:-|\u0000)\s*[A-Z0-9]+)*)/i,
+    /Receipt\s+(?:number|#)\s*[:#]?\s*([A-Z0-9]+(?:\s*(?:-|\u0000)\s*[A-Z0-9]+)*)/i,
   ]);
 
-  return cleanToken(invoiceNumber).replace(/\s*-\s*/g, "-");
+  return cleanToken(invoiceNumber).replace(/\s*(?:-|\u0000)\s*/g, "-");
 }

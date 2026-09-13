@@ -42,6 +42,32 @@ describe("OpenAI invoice parser", () => {
     expect(parsed.invoice.invoice_number).toBe("IA8NO7NL-0095");
   });
 
+  it("normalizes OpenAI PDF null separators as invoice number dashes", () => {
+    const parsed = parseInvoiceText(
+      baseOpenAiInvoiceText.replace("Invoice number IA8NO7NL-0095", "Invoice numberIA8NO7NL\u00000095"),
+      "Invoice-IA8NO7NL-0095.pdf",
+    );
+
+    expect(parsed.invoice.invoice_number).toBe("IA8NO7NL-0095");
+    expect(parsed.invoice.invoice_date).toBe("2026-08-31");
+    expect(parsed.status).toBe("extracted");
+  });
+
+  it("extracts distinct invoice numbers from the real OpenAI August PDF text shape", () => {
+    const parsedInvoices = ["0095", "0094", "0093"].map((suffix) =>
+      parseInvoiceText(
+        baseOpenAiInvoiceText.replace("Invoice number IA8NO7NL-0095", `Invoice numberIA8NO7NL\u0000${suffix}`),
+        `Invoice-IA8NO7NL-${suffix}.pdf`,
+      ),
+    );
+
+    expect(parsedInvoices.map((item) => item.invoice.invoice_number)).toEqual([
+      "IA8NO7NL-0095",
+      "IA8NO7NL-0094",
+      "IA8NO7NL-0093",
+    ]);
+  });
+
   it("marks the invoice as Da verificare when the invoice number cannot be extracted", () => {
     const parsed = parseInvoiceText(
       `
