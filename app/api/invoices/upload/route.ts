@@ -1,6 +1,9 @@
 import { parseInvoicePdf } from "@/lib/invoice-parser";
+import type { ParsedInvoice } from "@/lib/types";
 
 export const maxDuration = 60;
+
+let failedParseIndex = -1;
 
 export async function POST(request: Request) {
   const formData = await request.formData();
@@ -15,7 +18,11 @@ export async function POST(request: Request) {
   const invoices = await Promise.all(
     files.map(async (file) => {
       const buffer = Buffer.from(await file.arrayBuffer());
-      return parseInvoicePdf(buffer, file.name);
+      try {
+        return await parseInvoicePdf(buffer, file.name);
+      } catch (error) {
+        return buildFailedInvoice(file.name, error);
+      }
     }),
   );
 
@@ -38,4 +45,28 @@ export async function POST(request: Request) {
   });
 
   return Response.json({ invoices: enriched });
+}
+
+function buildFailedInvoice(fileName: string, error: unknown): ParsedInvoice {
+  failedParseIndex -= 1;
+  const message = error instanceof Error ? error.message : "Errore sconosciuto durante la lettura del PDF.";
+
+  return {
+    index: failedParseIndex,
+    file_name: fileName,
+    invoice: {
+      supplier: "Sconosciuto",
+      invoice_number: "",
+      invoice_date: "",
+      currency: "EUR",
+      net_amount: null,
+      tax_amount: null,
+      total_amount: null,
+      supplier_vat: "",
+    },
+    status: "needs_review",
+    confidence: 0,
+    extracted_text_preview: "",
+    warnings: [`PDF non leggibile automaticamente: ${message}`],
+  };
 }

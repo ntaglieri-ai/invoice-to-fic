@@ -18,18 +18,18 @@ export const hetznerParser: SupplierParser = {
         /Date\s*[:#]?\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})/i,
       ]),
       net_amount: firstAmount(text, [
-        /Net(?:\s+amount)?\s*[:#]?\s*([€$£]?\s?-?[\d,.]+)/i,
-        /Zwischensumme\s*[:#]?\s*([€$£]?\s?-?[\d,.]+)/i,
-        /Subtotal\s*[:#]?\s*([€$£]?\s?-?[\d,.]+)/i,
+        /Net(?:\s+amount)?\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
+        /Zwischensumme\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
+        /Subtotal\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
       ]),
       tax_amount: firstAmount(text, [
-        /VAT\s*[:#]?\s*([€$£]?\s?-?[\d,.]+)/i,
-        /MwSt\.?\s*[:#]?\s*([€$£]?\s?-?[\d,.]+)/i,
-        /Tax\s*[:#]?\s*([€$£]?\s?-?[\d,.]+)/i,
+        /VAT\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
+        /MwSt\.?\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
+        /Tax\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
       ]),
       total_amount: firstAmount(text, [
-        /Total\s*[:#]?\s*([€$£]?\s?-?[\d,.]+)/i,
-        /Gesamtbetrag\s*[:#]?\s*([€$£]?\s?-?[\d,.]+)/i,
+        /Total\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
+        /Gesamtbetrag\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
       ]),
     });
   },

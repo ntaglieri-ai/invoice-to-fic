@@ -17,16 +17,16 @@ export const vercelParser: SupplierParser = {
         /Date\s*[:#]?\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})/i,
       ]),
       net_amount: firstAmount(text, [
-        /Subtotal\s*[:#]?\s*([€$£]?\s?-?[\d,.]+)/i,
-        /Amount\s+due\s+before\s+tax\s*[:#]?\s*([€$£]?\s?-?[\d,.]+)/i,
+        /Subtotal\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
+        /Amount\s+due\s+before\s+tax\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
       ]),
       tax_amount: firstAmount(text, [
-        /Tax\s*[:#]?\s*([€$£]?\s?-?[\d,.]+)/i,
-        /VAT\s*[:#]?\s*([€$£]?\s?-?[\d,.]+)/i,
+        /Tax\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
+        /VAT\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
       ]),
       total_amount: firstAmount(text, [
-        /Total\s*[:#]?\s*([€$£]?\s?-?[\d,.]+)/i,
-        /Amount\s+due\s*[:#]?\s*([€$£]?\s?-?[\d,.]+)/i,
+        /Total\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
+        /Amount\s+due\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
       ]),
     });
   },
