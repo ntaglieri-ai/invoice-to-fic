@@ -21,7 +21,7 @@ export async function POST(request: Request) {
     return redirectToLogin(request, nextPath, "invalid");
   }
 
-  const response = NextResponse.redirect(new URL(nextPath, request.url));
+  const response = NextResponse.redirect(new URL(nextPath, request.url), 303);
   response.cookies.set(APP_AUTH_COOKIE, await createAppSessionCookieValue(), {
     httpOnly: true,
     sameSite: "lax",
@@ -37,7 +37,7 @@ function redirectToLogin(request: Request, nextPath: string, error: string) {
   const url = new URL("/login", request.url);
   url.searchParams.set("next", nextPath);
   url.searchParams.set("error", error);
-  return NextResponse.redirect(url);
+  return NextResponse.redirect(url, 303);
 }
 
 function sanitizeNextPath(value: string) {
