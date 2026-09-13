@@ -4,12 +4,15 @@ import {
   AlertTriangle,
   Check,
   CheckCircle2,
+  Cloud,
   FileText,
+  Link2,
+  LogOut,
   Pencil,
   RotateCcw,
   UploadCloud,
 } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { InvoiceFields, InvoiceStatus, ParsedInvoice, SupportedSupplier } from "@/lib/types";
 
 const SUPPLIERS: SupportedSupplier[] = ["OpenAI", "Anthropic", "Vercel", "Hetzner", "Supabase", "Sconosciuto"];
@@ -19,6 +22,27 @@ type UiInvoice = ParsedInvoice & {
 };
 
 type UploadState = "idle" | "dragging" | "uploading" | "error";
+
+type FicCompany = {
+  id: number | null;
+  name: string | null;
+  type: string | null;
+  controlled_companies?: FicCompany[] | null;
+};
+
+type FicStatus = {
+  connected: boolean;
+  config: {
+    configured: boolean;
+    missing: string[];
+    redirectUri: string;
+    scopes: string[];
+  };
+  companies: FicCompany[];
+  expiresAt?: string;
+  scope?: string;
+  error?: string;
+};
 
 const moneyFormatter = new Intl.NumberFormat("it-IT", {
   style: "currency",
@@ -31,6 +55,8 @@ export function InvoiceDashboard() {
   const [invoices, setInvoices] = useState<UiInvoice[]>([]);
   const [uploadState, setUploadState] = useState<UploadState>("idle");
   const [error, setError] = useState("");
+  const [ficStatus, setFicStatus] = useState<FicStatus | null>(null);
+  const [ficBusy, setFicBusy] = useState(false);
 
   const enrichedInvoices = useMemo(() => markDuplicates(invoices), [invoices]);
   const groups = useMemo(() => groupInvoices(enrichedInvoices), [enrichedInvoices]);
@@ -39,6 +65,23 @@ export function InvoiceDashboard() {
     [enrichedInvoices],
   );
   const approvedCount = enrichedInvoices.filter((item) => item.status === "approved").length;
+
+  useEffect(() => {
+    refreshFicStatus();
+  }, []);
+
+  async function refreshFicStatus() {
+    const response = await fetch("/api/fatture-in-cloud/status", { cache: "no-store" });
+    const payload = (await response.json()) as FicStatus;
+    setFicStatus(payload);
+  }
+
+  async function disconnectFic() {
+    setFicBusy(true);
+    await fetch("/api/fatture-in-cloud/disconnect", { method: "POST" });
+    await refreshFicStatus();
+    setFicBusy(false);
+  }
 
   async function uploadFiles(files: FileList | File[]) {
     const pdfs = Array.from(files).filter((file) => file.type === "application/pdf" || file.name.endsWith(".pdf"));
@@ -127,6 +170,13 @@ export function InvoiceDashboard() {
             <Metric label="Totale" value={formatMoney(globalTotal)} />
           </div>
         </header>
+
+        <FattureInCloudPanel
+          busy={ficBusy}
+          status={ficStatus}
+          onDisconnect={disconnectFic}
+          onRefresh={refreshFicStatus}
+        />
 
         <section className="grid gap-5 lg:grid-cols-[minmax(340px,420px),1fr]">
           <div className="flex flex-col gap-4">
@@ -260,6 +310,121 @@ export function InvoiceDashboard() {
         </section>
       </div>
     </main>
+  );
+}
+
+function FattureInCloudPanel({
+  busy,
+  status,
+  onDisconnect,
+  onRefresh,
+}: {
+  busy: boolean;
+  status: FicStatus | null;
+  onDisconnect: () => void;
+  onRefresh: () => void;
+}) {
+  const companies = status ? flattenCompanies(status.companies) : [];
+
+  return (
+    <section className="rounded-lg border border-line bg-white p-4 shadow-panel">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex items-start gap-3">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-slate-100 text-ink">
+            <Cloud size={20} />
+          </div>
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-base font-semibold">Fatture in Cloud</h2>
+              <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">
+                Invio disattivato
+              </span>
+              <FicConnectionBadge status={status} />
+            </div>
+            <p className="mt-1 text-sm text-slate-600">
+              Connessione OAuth pronta per leggere aziende e preparare la fase spese, reverse charge e TD17/TD18.
+            </p>
+            {status?.config.configured ? (
+              <p className="mt-2 text-xs text-slate-500">Scope: {status.config.scopes.join(", ")}</p>
+            ) : null}
+            {status?.config.configured === false ? (
+              <p className="mt-2 text-xs text-red-600">Mancano: {status.config.missing.join(", ")}</p>
+            ) : null}
+            {status?.error ? <p className="mt-2 text-xs text-red-600">{status.error}</p> : null}
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          {status?.connected && companies.length ? (
+            <select className="h-10 min-w-56 rounded-md border border-line bg-white px-3 text-sm">
+              {companies.map((company) => (
+                <option key={`${company.id}-${company.name}`} value={company.id ?? ""}>
+                  {company.name ?? `Azienda ${company.id ?? ""}`}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          <div className="flex gap-2">
+            <button
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-line px-3 text-sm font-medium hover:bg-slate-50"
+              onClick={onRefresh}
+              type="button"
+            >
+              <RotateCcw size={16} />
+              Aggiorna
+            </button>
+            {status?.connected ? (
+              <button
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-line px-3 text-sm font-medium hover:bg-slate-50 disabled:cursor-wait"
+                disabled={busy}
+                onClick={onDisconnect}
+                type="button"
+              >
+                <LogOut size={16} />
+                Scollega
+              </button>
+            ) : (
+              <a
+                className={`inline-flex h-10 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold ${
+                  status?.config.configured
+                    ? "bg-ink text-white"
+                    : "cursor-not-allowed bg-slate-200 text-slate-500"
+                }`}
+                href={status?.config.configured ? "/api/fatture-in-cloud/connect" : undefined}
+                aria-disabled={!status?.config.configured}
+              >
+                <Link2 size={16} />
+                Collega FIC
+              </a>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function FicConnectionBadge({ status }: { status: FicStatus | null }) {
+  if (!status) {
+    return (
+      <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-600">
+        Controllo...
+      </span>
+    );
+  }
+
+  if (status.connected) {
+    return (
+      <span className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">
+        Connesso
+      </span>
+    );
+  }
+
+  return (
+    <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-600">
+      Non collegato
+    </span>
   );
 }
 
@@ -406,6 +571,13 @@ function StatusBadge({ status }: { status: InvoiceStatus }) {
       {labels[status]}
     </span>
   );
+}
+
+function flattenCompanies(companies: FicCompany[]): FicCompany[] {
+  return companies.flatMap((company) => [
+    company,
+    ...(company.controlled_companies ? flattenCompanies(company.controlled_companies) : []),
+  ]);
 }
 
 function groupInvoices(invoices: UiInvoice[]) {
