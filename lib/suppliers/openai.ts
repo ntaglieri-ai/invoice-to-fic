@@ -1,5 +1,5 @@
 import type { SupplierParser } from "@/lib/types";
-import { completeResult, firstAmount, firstMatch, includesAny, parseDate } from "./common";
+import { cleanToken, completeResult, firstAmount, firstMatch, includesAny, parseDate } from "./common";
 
 export const openAiParser: SupplierParser = {
   supplier: "OpenAI",
@@ -8,11 +8,9 @@ export const openAiParser: SupplierParser = {
   },
   parse(text) {
     return completeResult("OpenAI", text, {
-      invoice_number: firstMatch(text, [
-        /Invoice\s+(?:number|#)\s*[:#]?\s*([A-Z0-9-]+)/i,
-        /Receipt\s+(?:number|#)\s*[:#]?\s*([A-Z0-9-]+)/i,
-      ]),
+      invoice_number: parseOpenAiInvoiceNumber(text),
       invoice_date: parseDate(text, [
+        /Date\s+of\s+issue\s*[:#]?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i,
         /Invoice\s+date\s*[:#]?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i,
         /Date\s+paid\s*[:#]?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i,
         /Date\s*[:#]?\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})/i,
@@ -32,3 +30,13 @@ export const openAiParser: SupplierParser = {
     });
   },
 };
+
+function parseOpenAiInvoiceNumber(text: string) {
+  const invoiceNumber = firstMatch(text, [
+    /Invoice\s+number\s*[:#]?\s*([A-Z0-9]+(?:\s*-\s*[A-Z0-9]+)*)/i,
+    /Invoice\s+#\s*([A-Z0-9]+(?:\s*-\s*[A-Z0-9]+)*)/i,
+    /Receipt\s+(?:number|#)\s*[:#]?\s*([A-Z0-9]+(?:\s*-\s*[A-Z0-9]+)*)/i,
+  ]);
+
+  return cleanToken(invoiceNumber).replace(/\s*-\s*/g, "-");
+}

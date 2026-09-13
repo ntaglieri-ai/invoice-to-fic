@@ -477,12 +477,7 @@ function InvoiceRow({
           <Editable value={invoice.invoice.invoice_number} onChange={(value) => onChange(invoice.id, "invoice_number", value)} />
         </td>
         <td className="px-4 py-3">
-          <input
-            className="h-9 w-36 rounded-md border border-line px-2"
-            type="date"
-            value={invoice.invoice.invoice_date}
-            onChange={(event) => onChange(invoice.id, "invoice_date", event.target.value)}
-          />
+          <EditableDate value={invoice.invoice.invoice_date} onChange={(value) => onChange(invoice.id, "invoice_date", value)} />
         </td>
         <td className="px-4 py-3">
           <Editable value={invoice.invoice.net_amount ?? ""} onChange={(value) => onChange(invoice.id, "net_amount", value)} />
@@ -550,6 +545,32 @@ function Editable({ value, onChange }: { value: string | number; onChange: (valu
         onChange={(event) => onChange(event.target.value)}
       />
     </label>
+  );
+}
+
+function EditableDate({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  function commit(element: HTMLInputElement) {
+    const parsed = parseDisplayDate(element.value);
+    if (parsed || element.value.trim() === "") {
+      onChange(parsed);
+      return;
+    }
+
+    element.value = formatDateForDisplay(value);
+  }
+
+  return (
+    <input
+      key={value}
+      className="h-9 w-32 rounded-md border border-line px-2"
+      defaultValue={formatDateForDisplay(value)}
+      inputMode="numeric"
+      onBlur={(event) => commit(event.currentTarget)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+      }}
+      placeholder="gg/mm/aaaa"
+    />
   );
 }
 
@@ -627,6 +648,28 @@ function parseEditableNumber(value: string) {
   const normalized = value.replace(/\./g, "").replace(",", ".");
   const parsed = Number.parseFloat(normalized);
   return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : null;
+}
+
+function formatDateForDisplay(value: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : value;
+}
+
+function parseDisplayDate(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+
+  const italian = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (italian) {
+    return [italian[3], italian[2].padStart(2, "0"), italian[1].padStart(2, "0")].join("-");
+  }
+
+  const iso = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (iso) {
+    return [iso[1], iso[2].padStart(2, "0"), iso[3].padStart(2, "0")].join("-");
+  }
+
+  return "";
 }
 
 function formatMoney(value: number) {

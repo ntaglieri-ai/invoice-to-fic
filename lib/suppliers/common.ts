@@ -134,7 +134,22 @@ export function normalizeDate(value: string) {
 
 export function parseDate(text: string, patterns: RegExp[]) {
   const value = firstMatch(text, patterns);
-  return value ? normalizeDate(value) : "";
+  if (!value) return "";
+
+  const normalized = normalizeDate(value);
+  return isValidIsoDate(normalized) ? normalized : "";
+}
+
+function isValidIsoDate(value: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return false;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
 export function parseVat(text: string, fallbackPatterns: RegExp[] = []) {
