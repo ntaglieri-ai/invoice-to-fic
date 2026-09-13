@@ -281,7 +281,7 @@ export function InvoiceDashboard() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[980px] border-collapse text-left text-sm">
+              <table className="w-full min-w-[1120px] border-collapse text-left text-sm">
                 <thead className="bg-slate-50 text-xs uppercase tracking-normal text-slate-500">
                   <tr>
                     <th className="px-4 py-3">Fornitore</th>
@@ -474,7 +474,11 @@ function InvoiceRow({
           </select>
         </td>
         <td className="px-4 py-3">
-          <Editable value={invoice.invoice.invoice_number} onChange={(value) => onChange(invoice.id, "invoice_number", value)} />
+          <Editable
+            inputClassName="w-44 font-mono text-[13px]"
+            value={invoice.invoice.invoice_number}
+            onChange={(value) => onChange(invoice.id, "invoice_number", value)}
+          />
         </td>
         <td className="px-4 py-3">
           <EditableDate value={invoice.invoice.invoice_date} onChange={(value) => onChange(invoice.id, "invoice_date", value)} />
@@ -535,12 +539,21 @@ function InvoiceRow({
   );
 }
 
-function Editable({ value, onChange }: { value: string | number; onChange: (value: string) => void }) {
+function Editable({
+  inputClassName = "w-32",
+  value,
+  onChange,
+}: {
+  inputClassName?: string;
+  value: string | number;
+  onChange: (value: string) => void;
+}) {
   return (
     <label className="relative block">
       <Pencil className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
       <input
-        className="h-9 w-32 rounded-md border border-line pl-8 pr-2"
+        className={`h-9 rounded-md border border-line pl-8 pr-2 ${inputClassName}`}
+        title={String(value)}
         value={value}
         onChange={(event) => onChange(event.target.value)}
       />
