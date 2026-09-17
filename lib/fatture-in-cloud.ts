@@ -2,13 +2,14 @@ import "server-only";
 
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import type { InvoiceFields } from "@/lib/types";
+import { FIC_EXPENSE_WRITE_SCOPE } from "@/lib/fic-permissions";
 
 export type ReverseChargeMode = "none" | "td17" | "td18";
 
 export const FIC_API_BASE_URL = "https://api-v2.fattureincloud.it";
 export const FIC_SESSION_COOKIE = "fic_oauth_session";
 export const FIC_STATE_COOKIE = "fic_oauth_state";
-export const FIC_DEFAULT_SCOPES = ["entity.suppliers:r", "received_documents:rw"] as const;
+export const FIC_DEFAULT_SCOPES = ["entity.suppliers:r", FIC_EXPENSE_WRITE_SCOPE] as const;
 
 export type FattureInCloudDraftExpense = {
   supplierName: string;
@@ -187,7 +188,7 @@ function getConfiguredScopes() {
   return [...new Set([
     ...(process.env.FIC_SCOPES?.split(/\s+/).filter(Boolean) ?? []),
     ...FIC_DEFAULT_SCOPES,
-  ])].filter((scope) => scope !== "received_documents:r");
+  ])].filter((scope) => scope !== "received_documents:r" && scope !== "received_documents:rw");
 }
 
 function getRequiredConfig() {

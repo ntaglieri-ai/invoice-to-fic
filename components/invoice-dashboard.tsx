@@ -16,6 +16,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { InvoiceFields, InvoiceStatus, ParsedInvoice, SupportedSupplier } from "@/lib/types";
 import { invoiceErrors } from "@/lib/expense-validation";
 import { ExpenseDialog } from "@/components/expense-dialog";
+import { canWriteExpenses, ficConnectionNotice } from "@/lib/fic-permissions";
 
 const SUPPLIERS: SupportedSupplier[] = ["OpenAI", "Anthropic", "Vercel", "Hetzner", "Supabase", "Sconosciuto"];
 
@@ -60,10 +61,11 @@ export function InvoiceDashboard() {
   const [error, setError] = useState("");
   const [ficStatus, setFicStatus] = useState<FicStatus | null>(null);
   const [ficBusy, setFicBusy] = useState(false);
+  const [ficNotice, setFicNotice] = useState<ReturnType<typeof ficConnectionNotice>>(null);
   const [companyId, setCompanyId] = useState("");
   const [expenseId, setExpenseId] = useState<string | null>(null);
   const expenseInvoice = invoices.find((item) => item.id === expenseId);
-  const canWrite = Boolean(ficStatus?.connected && ficStatus.scope?.split(/\s+/).includes("received_documents:rw"));
+  const canWrite = Boolean(ficStatus?.connected && canWriteExpenses(ficStatus.scope));
 
   const enrichedInvoices = useMemo(() => markDuplicates(invoices), [invoices]);
   const groups = useMemo(() => groupInvoices(enrichedInvoices), [enrichedInvoices]);
@@ -83,6 +85,7 @@ export function InvoiceDashboard() {
     if (!response.ok) throw new Error("Impossibile verificare la connessione FIC.");
     const payload = (await response.json()) as FicStatus;
     setFicStatus(payload);
+    setFicNotice(ficConnectionNotice(new URLSearchParams(window.location.search).get("fic"), payload.connected, payload.scope));
     const companies = flattenCompanies(payload.companies).filter((item) => item.id && item.type !== "accountant");
     setCompanyId((current) => companies.some((item) => String(item.id) === current) ? current : String(companies[0]?.id ?? ""));
     } catch (error) {
@@ -204,6 +207,7 @@ export function InvoiceDashboard() {
           </div>
         </header>
 
+        {ficNotice && <p role={ficNotice.error ? "alert" : "status"} className={`rounded-md border p-4 text-sm ${ficNotice.error ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-800"}`}>{ficNotice.message}</p>}
         <FattureInCloudPanel
           busy={ficBusy}
           status={ficStatus}

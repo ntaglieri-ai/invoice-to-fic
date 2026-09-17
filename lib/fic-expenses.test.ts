@@ -39,7 +39,8 @@ describe("expense validation and payload", () => {
   it("does not treat read-only or missing scope as permission to write", () => {
     expect(canWriteExpenses()).toBe(false);
     expect(canWriteExpenses("received_documents:r")).toBe(false);
-    expect(canWriteExpenses("entity.suppliers:r received_documents:rw")).toBe(true);
+    expect(canWriteExpenses("received_documents:rw")).toBe(false);
+    expect(canWriteExpenses("entity.suppliers:r received_documents:a")).toBe(true);
   });
 });
 

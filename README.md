@@ -8,7 +8,7 @@ Configurare `.env.local` usando i nomi in `.env.example`, poi eseguire `npm inst
 
 ## Registrazione spese
 
-1. Autorizzare FIC con `entity.suppliers:r received_documents:rw`. Le precedenti sessioni in sola lettura richiedono un nuovo consenso tramite "Autorizza spese".
+1. Autorizzare FIC con `entity.suppliers:r received_documents:a`. Le precedenti sessioni in sola lettura richiedono un nuovo consenso tramite "Autorizza spese".
 2. Selezionare l'azienda, caricare i PDF, correggere e approvare i dati.
 3. Per una fattura approvata in EUR, scegliere "Prepara spesa".
 4. Selezionare il fornitore gia presente in FIC, indicare deducibilita del costo, detraibilita IVA e scadenza. Nessuna percentuale fiscale viene scelta automaticamente.

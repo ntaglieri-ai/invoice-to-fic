@@ -15,8 +15,21 @@ export async function GET(request: Request) {
   const expectedState = cookieStore.get(FIC_STATE_COOKIE)?.value;
   const redirectUrl = new URL("/", request.url);
 
-  if (!code || !returnedState || !expectedState || returnedState !== expectedState) {
+  if (!returnedState || !expectedState || returnedState !== expectedState) {
+    console.warn("FIC OAuth callback rejected: invalid state.");
     redirectUrl.searchParams.set("fic", "invalid-state");
+    const response = NextResponse.redirect(redirectUrl);
+    response.cookies.delete(FIC_STATE_COOKIE);
+    return response;
+  }
+
+  const providerError = url.searchParams.get("error");
+  if (providerError || !code) {
+    const reason = providerError === "invalid_scope" ? "invalid-scope"
+      : providerError === "access_denied" ? "access-denied"
+      : providerError ? "authorization-error" : "missing-code";
+    console.warn("FIC OAuth authorization failed:", reason);
+    redirectUrl.searchParams.set("fic", reason);
     const response = NextResponse.redirect(redirectUrl);
     response.cookies.delete(FIC_STATE_COOKIE);
     return response;

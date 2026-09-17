@@ -8,9 +8,7 @@ type Page<T> = { data?: T[]; current_page?: number; last_page?: number };
 type ExistingExpense = { id: number; invoice_number?: string; entity?: { id?: number; name?: string; vat_number?: string } };
 export type ExpenseTicket = { companyId: number; invoice: InvoiceFields; options: ExpenseOptions; expiresAt: number; owner: string };
 
-export function canWriteExpenses(scope?: string) {
-  return Boolean(scope?.split(/\s+/).includes("received_documents:rw"));
-}
+export { canWriteExpenses } from "@/lib/fic-permissions";
 
 export async function requireCompany(token: string, companyId: number) {
   if (!Number.isSafeInteger(companyId) || companyId <= 0) throw new Error("Azienda non valida.");

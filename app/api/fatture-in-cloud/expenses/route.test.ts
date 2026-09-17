@@ -8,7 +8,7 @@ vi.mock("@/lib/fatture-in-cloud", () => ({
   refreshFattureInCloudSession: vi.fn(), sealFattureInCloudSession: vi.fn(),
 }));
 vi.mock("@/lib/fic-expenses", () => ({
-  canWriteExpenses: (scope: string) => scope === "received_documents:rw",
+  canWriteExpenses: (scope: string) => scope === "received_documents:a",
   createReviewedExpense: vi.fn(), readExpenseTicket: vi.fn(), ticketOwner: () => "owner",
   requireCompany: vi.fn(), requireSupplier: vi.fn(), listExpenseSuppliers: vi.fn(), findExistingExpense: vi.fn(), signExpenseTicket: vi.fn(),
 }));
@@ -27,7 +27,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(cookies).mockResolvedValue({ get: () => ({ value: "test-cookie" }) } as unknown as Awaited<ReturnType<typeof cookies>>);
   vi.mocked(verifyAppSessionCookieValue).mockResolvedValue(true);
-  vi.mocked(unsealFattureInCloudSession).mockReturnValue({ accessToken: "mock-token", refreshToken: "mock-refresh", expiresAt: "2099-01-01", scope: "received_documents:rw" });
+  vi.mocked(unsealFattureInCloudSession).mockReturnValue({ accessToken: "mock-token", refreshToken: "mock-refresh", expiresAt: "2099-01-01", scope: "received_documents:a" });
 });
 
 it("rejects cross-origin requests before any write", async () => {
