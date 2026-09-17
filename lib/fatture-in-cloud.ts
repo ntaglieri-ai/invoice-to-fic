@@ -2,14 +2,14 @@ import "server-only";
 
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import type { InvoiceFields } from "@/lib/types";
-import { FIC_EXPENSE_WRITE_SCOPE } from "@/lib/fic-permissions";
+import { FIC_EXPENSE_WRITE_SCOPE, FIC_TD17_WRITE_SCOPE } from "@/lib/fic-permissions";
 
 export type ReverseChargeMode = "none" | "td17" | "td18";
 
 export const FIC_API_BASE_URL = "https://api-v2.fattureincloud.it";
 export const FIC_SESSION_COOKIE = "fic_oauth_session";
 export const FIC_STATE_COOKIE = "fic_oauth_state";
-export const FIC_DEFAULT_SCOPES = ["entity.suppliers:r", FIC_EXPENSE_WRITE_SCOPE] as const;
+export const FIC_DEFAULT_SCOPES = ["entity.suppliers:r", FIC_EXPENSE_WRITE_SCOPE, FIC_TD17_WRITE_SCOPE] as const;
 
 export type FattureInCloudDraftExpense = {
   supplierName: string;
@@ -134,6 +134,9 @@ export async function listUserCompanies(accessToken: string): Promise<FattureInC
 }
 
 export async function ficFetch<T>(accessToken: string, path: string, init: RequestInit = {}): Promise<T> {
+  if (/\/e_invoice\/send\/?$/.test(new URL(path, FIC_API_BASE_URL).pathname)) {
+    throw new Error("Invio SDI disabilitato nell'app. Conferma l'invio direttamente in Fatture in Cloud.");
+  }
   const response = await fetch(new URL(path, FIC_API_BASE_URL), {
     ...init,
     cache: "no-store",

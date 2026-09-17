@@ -16,7 +16,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { InvoiceFields, InvoiceStatus, ParsedInvoice, SupportedSupplier } from "@/lib/types";
 import { invoiceErrors, type PreparedExpense } from "@/lib/expense-validation";
 import { ExpenseDialog } from "@/components/expense-dialog";
-import { canWriteExpenses, ficConnectionNotice } from "@/lib/fic-permissions";
+import { Td17Dialog } from "@/components/td17-dialog";
+import { canPrepareTd17, canWriteExpenses, ficConnectionNotice } from "@/lib/fic-permissions";
 
 const SUPPLIERS: SupportedSupplier[] = ["OpenAI", "Anthropic", "Vercel", "Hetzner", "Supabase", "Sconosciuto"];
 
@@ -24,6 +25,7 @@ type UiInvoice = ParsedInvoice & {
   id: string;
   ficId?: number;
   expenseDraft?: PreparedExpense;
+  td17?: { companyId: number; id: number };
 };
 
 type UploadState = "idle" | "dragging" | "uploading" | "error";
@@ -65,8 +67,11 @@ export function InvoiceDashboard() {
   const [ficNotice, setFicNotice] = useState<ReturnType<typeof ficConnectionNotice>>(null);
   const [companyId, setCompanyId] = useState("");
   const [expenseId, setExpenseId] = useState<string | null>(null);
+  const [td17Id, setTd17Id] = useState<string | null>(null);
+  const td17Invoice = invoices.find((item) => item.id === td17Id);
   const expenseInvoice = invoices.find((item) => item.id === expenseId);
   const canWrite = Boolean(ficStatus?.connected && canWriteExpenses(ficStatus.scope));
+  const canTd17 = Boolean(ficStatus?.connected && canPrepareTd17(ficStatus.scope));
 
   const enrichedInvoices = useMemo(() => markDuplicates(invoices), [invoices]);
   const groups = useMemo(() => groupInvoices(enrichedInvoices), [enrichedInvoices]);
@@ -143,7 +148,7 @@ export function InvoiceDashboard() {
   function updateInvoice(id: string, field: keyof InvoiceFields, rawValue: string) {
     setInvoices((current) =>
       current.map((item) => {
-        if (item.id !== id || item.ficId) return item;
+        if (item.id !== id || item.ficId || item.td17) return item;
         const value = field.endsWith("_amount") ? parseEditableNumber(rawValue) : rawValue;
         return {
           ...item,
@@ -337,6 +342,8 @@ export function InvoiceDashboard() {
                         onApprove={approveInvoice}
                         onChange={updateInvoice}
                         canCreate={canWrite && Boolean(companyId)}
+                        canTd17={canTd17}
+                        onTd17={setTd17Id}
                         activeCompanyId={Number(companyId)}
                         onCreate={setExpenseId}
                       />
@@ -353,6 +360,13 @@ export function InvoiceDashboard() {
             </div>
           </div>
         </section>
+        {td17Invoice && companyId && <Td17Dialog
+          key={`${td17Invoice.id}-${companyId}`}
+          invoice={td17Invoice.invoice}
+          companyId={Number(companyId)}
+          onClose={() => setTd17Id(null)}
+          onCreated={(result) => setInvoices((current) => current.map((item) => item.id === td17Invoice.id ? { ...item, td17: { companyId: Number(companyId), id: result.id } } : item))}
+        />}
         {expenseInvoice && companyId && <ExpenseDialog
           key={`${expenseInvoice.id}-${companyId}`}
           invoice={expenseInvoice.invoice}
@@ -397,12 +411,12 @@ function FattureInCloudPanel({
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-base font-semibold">Fatture in Cloud</h2>
               <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">
-                {canWrite ? "Spese con conferma" : "Sola lettura"}
+                {canPrepareTd17(status?.scope) ? "Spese e TD17" : canWrite ? "Spese con conferma" : "Sola lettura"}
               </span>
               <FicConnectionBadge status={status} />
             </div>
             <p className="mt-1 text-sm text-slate-600">
-              {canWrite ? "Registrazione spese EUR disponibile. Invio SDI disattivato." : "Ricollega FIC per autorizzare la registrazione delle spese."}
+              {canPrepareTd17(status?.scope) ? "TD17 non inviati. Conferma finale dell'invio in FIC." : canWrite ? "Registrazione spese EUR disponibile. Autorizza TD17 per preparare le autofatture." : "Ricollega FIC per autorizzare la registrazione delle spese."}
             </p>
             {status?.config.configured ? (
               <p className="mt-2 text-xs text-slate-500">Scope: {status.config.scopes.join(", ")}</p>
@@ -426,6 +440,7 @@ function FattureInCloudPanel({
           ) : null}
           <div className="flex gap-2">
             {status?.connected && !canWrite && <a className="inline-flex h-10 items-center gap-2 rounded-md bg-ink px-3 text-sm text-white" href="/api/fatture-in-cloud/connect"><Link2 size={16} />Autorizza spese</a>}
+            {status?.connected && canWrite && !canPrepareTd17(status.scope) && <a className="inline-flex h-10 items-center gap-2 rounded-md bg-ink px-3 text-sm text-white" href="/api/fatture-in-cloud/connect"><Link2 size={16} />Autorizza TD17</a>}
             <button
               className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-line px-3 text-sm font-medium hover:bg-slate-50"
               onClick={onRefresh}
@@ -497,6 +512,8 @@ function InvoiceRow({
   canCreate,
   onCreate,
   activeCompanyId,
+  canTd17,
+  onTd17,
 }: {
   invoice: UiInvoice;
   isGroupStart: boolean;
@@ -505,9 +522,12 @@ function InvoiceRow({
   canCreate: boolean;
   activeCompanyId: number;
   onCreate: (id: string) => void;
+  canTd17: boolean;
+  onTd17: (id: string) => void;
 }) {
   const duplicate = invoice.status === "duplicate";
   const draft = invoice.expenseDraft?.companyId === activeCompanyId ? invoice.expenseDraft : undefined;
+  const locked = Boolean(invoice.ficId || invoice.td17);
 
   return (
     <>
@@ -521,7 +541,7 @@ function InvoiceRow({
       <tr className={duplicate ? "bg-amber-50" : "border-t border-slate-100"}>
         <td className="px-4 py-3">
           <select
-            disabled={Boolean(invoice.ficId)}
+            disabled={locked}
             className="h-9 w-36 rounded-md border border-line bg-white px-2"
             value={invoice.invoice.supplier}
             onChange={(event) => onChange(invoice.id, "supplier", event.target.value)}
@@ -533,23 +553,23 @@ function InvoiceRow({
         </td>
         <td className="px-4 py-3">
           <Editable
-            disabled={Boolean(invoice.ficId)}
+            disabled={locked}
             inputClassName="w-44 font-mono text-[13px]"
             value={invoice.invoice.invoice_number}
             onChange={(value) => onChange(invoice.id, "invoice_number", value)}
           />
         </td>
         <td className="px-4 py-3">
-          <EditableDate disabled={Boolean(invoice.ficId)} value={invoice.invoice.invoice_date} onChange={(value) => onChange(invoice.id, "invoice_date", value)} />
+          <EditableDate disabled={locked} value={invoice.invoice.invoice_date} onChange={(value) => onChange(invoice.id, "invoice_date", value)} />
         </td>
         <td className="px-4 py-3">
-          <Editable disabled={Boolean(invoice.ficId)} value={invoice.invoice.net_amount ?? ""} onChange={(value) => onChange(invoice.id, "net_amount", value)} />
+          <Editable disabled={locked} value={invoice.invoice.net_amount ?? ""} onChange={(value) => onChange(invoice.id, "net_amount", value)} />
         </td>
         <td className="px-4 py-3">
-          <Editable disabled={Boolean(invoice.ficId)} value={invoice.invoice.tax_amount ?? ""} onChange={(value) => onChange(invoice.id, "tax_amount", value)} />
+          <Editable disabled={locked} value={invoice.invoice.tax_amount ?? ""} onChange={(value) => onChange(invoice.id, "tax_amount", value)} />
         </td>
         <td className="px-4 py-3">
-          <Editable disabled={Boolean(invoice.ficId)} value={invoice.invoice.total_amount ?? ""} onChange={(value) => onChange(invoice.id, "total_amount", value)} />
+          <Editable disabled={locked} value={invoice.invoice.total_amount ?? ""} onChange={(value) => onChange(invoice.id, "total_amount", value)} />
         </td>
         <td className="px-4 py-3">
           <StatusBadge status={invoice.status} />
@@ -559,7 +579,7 @@ function InvoiceRow({
         <td className="px-4 py-3">
           <button
             className="inline-flex h-9 items-center gap-2 rounded-md border border-line px-3 text-sm font-medium hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
-            disabled={duplicate || Boolean(invoice.ficId)}
+            disabled={duplicate || locked}
             onClick={() => onApprove(invoice.id)}
             type="button"
             title={duplicate ? "Risolvi il duplicato prima di approvare" : "Approva fattura"}
@@ -568,6 +588,7 @@ function InvoiceRow({
             Approva
           </button>
           {invoice.ficId ? <p className="mt-2 text-xs text-emerald-700">Registrata FIC #{invoice.ficId}</p> : <button type="button" disabled={!canCreate || invoice.status !== "approved" || invoice.invoice.currency !== "EUR"} onClick={() => onCreate(invoice.id)} className="mt-2 inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-md border border-line px-3 text-sm disabled:opacity-40"><Cloud size={16} />{draft ? "Rivedi bozza" : "Prepara spesa"}</button>}
+          {invoice.td17?.companyId === activeCompanyId ? <p className="mt-2 text-xs text-emerald-700">TD17 FIC #{invoice.td17.id}</p> : <button type="button" disabled={!canTd17 || invoice.status !== "approved" || invoice.invoice.currency !== "EUR" || invoice.invoice.tax_amount !== 0} onClick={() => onTd17(invoice.id)} className="mt-2 inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-md border border-line px-3 text-sm disabled:opacity-40"><FileText size={16} />Prepara TD17</button>}
         </td>
       </tr>
       <tr className={duplicate ? "bg-amber-50/70" : "border-b border-slate-100 bg-white"}>
@@ -578,7 +599,7 @@ function InvoiceRow({
               <span>Valuta</span>
               <input
                 className="h-8 w-20 rounded-md border border-line px-2 uppercase"
-                disabled={Boolean(invoice.ficId)}
+                disabled={locked}
                 maxLength={3}
                 value={invoice.invoice.currency}
                 onChange={(event) => onChange(invoice.id, "currency", event.target.value.toUpperCase())}
@@ -588,7 +609,7 @@ function InvoiceRow({
               <span>VAT fornitore</span>
               <input
                 className="h-8 w-44 rounded-md border border-line px-2 uppercase"
-                disabled={Boolean(invoice.ficId)}
+                disabled={locked}
                 value={invoice.invoice.supplier_vat}
                 onChange={(event) => onChange(invoice.id, "supplier_vat", event.target.value.toUpperCase())}
               />

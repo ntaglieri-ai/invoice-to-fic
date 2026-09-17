@@ -18,7 +18,7 @@ export async function requireCompany(token: string, companyId: number) {
   return company;
 }
 
-async function listAll<T>(token: string, path: string): Promise<T[]> {
+export async function listAll<T>(token: string, path: string): Promise<T[]> {
   const all: T[] = [];
   // Fail closed if pagination cannot be completed; a partial list cannot rule out duplicates.
   for (let page = 1; page <= 100; page++) {

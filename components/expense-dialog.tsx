@@ -189,7 +189,7 @@ export function ExpenseDialog({ invoice, companyId, initialDraft, onClose, onPre
           <label className="block text-sm">Scadenza pagamento (da confermare)<input type="date" className={input} value={dueDate} onChange={(event) => setDueDate(event.target.value)} /></label>
           <div className="space-y-1 border-y border-line py-3 text-sm">
             <p className={preferences ? "text-emerald-700" : "text-amber-700"}>{preferences ? `${suggested ? "Profilo SaaS proposto" : "Impostazioni fornitore"}: costo ${preferences.taxDeductibility}% · IVA ${preferences.vatDeductibility}%` : "Dati fiscali da confermare"}</p>
-            {suggestedForeignDocument(invoice) && <p className="text-slate-600">TD17 proposto · preparazione e invio non ancora disponibili.</p>}
+            {suggestedForeignDocument(invoice) && <p className="text-slate-600">TD17 preparabile dopo la registrazione della spesa. Invio solo in FIC.</p>}
           </div>
           <details className="text-sm">
             <summary className="cursor-pointer py-2"><span className="inline-flex items-center gap-2"><Settings2 size={16} />Impostazioni fiscali del fornitore</span></summary>
