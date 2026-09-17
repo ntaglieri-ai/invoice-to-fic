@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { InvoiceFields, InvoiceStatus, ParsedInvoice, SupportedSupplier } from "@/lib/types";
-import { invoiceErrors } from "@/lib/expense-validation";
+import { invoiceErrors, type PreparedExpense } from "@/lib/expense-validation";
 import { ExpenseDialog } from "@/components/expense-dialog";
 import { canWriteExpenses, ficConnectionNotice } from "@/lib/fic-permissions";
 
@@ -23,6 +23,7 @@ const SUPPLIERS: SupportedSupplier[] = ["OpenAI", "Anthropic", "Vercel", "Hetzne
 type UiInvoice = ParsedInvoice & {
   id: string;
   ficId?: number;
+  expenseDraft?: PreparedExpense;
 };
 
 type UploadState = "idle" | "dragging" | "uploading" | "error";
@@ -147,6 +148,7 @@ export function InvoiceDashboard() {
         return {
           ...item,
           status: "needs_review",
+          expenseDraft: undefined,
           invoice: {
             ...item.invoice,
             [field]: value,
@@ -335,6 +337,7 @@ export function InvoiceDashboard() {
                         onApprove={approveInvoice}
                         onChange={updateInvoice}
                         canCreate={canWrite && Boolean(companyId)}
+                        activeCompanyId={Number(companyId)}
                         onCreate={setExpenseId}
                       />
                     ))
@@ -354,7 +357,9 @@ export function InvoiceDashboard() {
           key={`${expenseInvoice.id}-${companyId}`}
           invoice={expenseInvoice.invoice}
           companyId={Number(companyId)}
+          initialDraft={expenseInvoice.expenseDraft?.companyId === Number(companyId) ? expenseInvoice.expenseDraft : undefined}
           onClose={() => setExpenseId(null)}
+          onPrepared={(expenseDraft) => setInvoices((current) => current.map((item) => item.id === expenseInvoice.id ? { ...item, expenseDraft } : item))}
           onCreated={(ficId) => setInvoices((current) => current.map((item) => item.id === expenseInvoice.id ? { ...item, ficId } : item))}
         />}
       </div>
@@ -491,15 +496,18 @@ function InvoiceRow({
   onChange,
   canCreate,
   onCreate,
+  activeCompanyId,
 }: {
   invoice: UiInvoice;
   isGroupStart: boolean;
   onApprove: (id: string) => void;
   onChange: (id: string, field: keyof InvoiceFields, rawValue: string) => void;
   canCreate: boolean;
+  activeCompanyId: number;
   onCreate: (id: string) => void;
 }) {
   const duplicate = invoice.status === "duplicate";
+  const draft = invoice.expenseDraft?.companyId === activeCompanyId ? invoice.expenseDraft : undefined;
 
   return (
     <>
@@ -545,6 +553,7 @@ function InvoiceRow({
         </td>
         <td className="px-4 py-3">
           <StatusBadge status={invoice.status} />
+          {draft && !invoice.ficId && <p className="mt-2 text-xs text-amber-700">{draft.status === "needs_configuration" ? "Bozza: dati fiscali da confermare" : "Bozza pronta"}</p>}
           {invoice.warnings.length ? <p className="mt-1 text-xs text-slate-500">{invoice.warnings[0]}</p> : null}
         </td>
         <td className="px-4 py-3">
@@ -558,7 +567,7 @@ function InvoiceRow({
             <Check size={16} />
             Approva
           </button>
-          {invoice.ficId ? <p className="mt-2 text-xs text-emerald-700">Registrata FIC #{invoice.ficId}</p> : <button type="button" disabled={!canCreate || invoice.status !== "approved" || invoice.invoice.currency !== "EUR"} onClick={() => onCreate(invoice.id)} className="mt-2 inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-md border border-line px-3 text-sm disabled:opacity-40"><Cloud size={16} />Prepara spesa</button>}
+          {invoice.ficId ? <p className="mt-2 text-xs text-emerald-700">Registrata FIC #{invoice.ficId}</p> : <button type="button" disabled={!canCreate || invoice.status !== "approved" || invoice.invoice.currency !== "EUR"} onClick={() => onCreate(invoice.id)} className="mt-2 inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-md border border-line px-3 text-sm disabled:opacity-40"><Cloud size={16} />{draft ? "Rivedi bozza" : "Prepara spesa"}</button>}
         </td>
       </tr>
       <tr className={duplicate ? "bg-amber-50/70" : "border-b border-slate-100 bg-white"}>

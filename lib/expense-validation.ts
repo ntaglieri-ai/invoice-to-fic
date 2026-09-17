@@ -7,14 +7,26 @@ export type ExpenseOptions = {
   dueDate: string;
 };
 
+export type ExpensePreparationOptions = Omit<ExpenseOptions, "taxDeductibility" | "vatDeductibility"> & {
+  taxDeductibility: number | null;
+  vatDeductibility: number | null;
+};
+
+export type PreparedExpense = {
+  companyId: number;
+  options: ExpensePreparationOptions;
+  status: "ready" | "needs_configuration";
+};
+
 export type FicSupplier = { id: number; name: string; vat_number?: string };
 
 export type ExpensePreview = {
-  ticket: string;
+  ticket: string | null;
+  status: "ready" | "needs_configuration";
   companyName: string;
   supplier: FicSupplier;
   invoice: InvoiceFields;
-  options: ExpenseOptions;
+  options: ExpensePreparationOptions;
   expiresAt: number;
 };
 
@@ -42,17 +54,28 @@ export function invoiceErrors(value: unknown): string[] {
   return errors;
 }
 
-export function validateExpense(invoice: unknown, options: unknown): asserts invoice is InvoiceFields {
+export function validateExpensePreparation(invoice: unknown, options: unknown): asserts invoice is InvoiceFields {
   const errors = invoiceErrors(invoice);
   const fields = invoice as InvoiceFields | null;
   if (fields?.currency !== "EUR") errors.push("La creazione spese supporta per ora solo EUR.");
-  const settings = options as ExpenseOptions | null;
+  const settings = options as ExpensePreparationOptions | null;
   if (!settings || !Number.isSafeInteger(settings.supplierId) || settings.supplierId <= 0) errors.push("Seleziona un fornitore FIC.");
   for (const value of [settings?.taxDeductibility, settings?.vatDeductibility]) {
-    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100) errors.push("Indica deducibilita e detraibilita tra 0 e 100.");
+    if (value !== null && (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100)) errors.push("Indica deducibilita e detraibilita tra 0 e 100, oppure lascia i dati da confermare.");
   }
   if (!isValidInvoiceDate(settings?.dueDate)) errors.push("Scadenza non valida.");
   if (errors.length) throw new Error(errors.join(" "));
+}
+
+export function hasExpenseTaxSettings(options: ExpensePreparationOptions): options is ExpenseOptions {
+  return [options.taxDeductibility, options.vatDeductibility].every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100);
+}
+
+export function validateExpense(invoice: unknown, options: unknown): asserts invoice is InvoiceFields {
+  validateExpensePreparation(invoice, options);
+  if (!hasExpenseTaxSettings(options as ExpensePreparationOptions)) {
+    throw new Error("Impostazioni fiscali da confermare prima della registrazione in FIC.");
+  }
 }
 
 export function normalizeIdentifier(value: string) {

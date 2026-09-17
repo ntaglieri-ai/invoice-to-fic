@@ -35,7 +35,7 @@ export function listExpenseSuppliers(token: string, companyId: number) {
   return listAll<FicSupplier>(token, `/c/${companyId}/entities/suppliers?fields=id,name,vat_number`);
 }
 
-export async function requireSupplier(token: string, companyId: number, invoice: InvoiceFields, options: ExpenseOptions) {
+export async function requireSupplier(token: string, companyId: number, invoice: InvoiceFields, options: Pick<ExpenseOptions, "supplierId">) {
   const suppliers = await listExpenseSuppliers(token, companyId);
   const supplier = suppliers.find((item) => item.id === options.supplierId);
   if (!supplier) throw new Error("Fornitore non presente nell'azienda selezionata.");

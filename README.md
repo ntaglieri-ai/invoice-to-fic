@@ -11,8 +11,12 @@ Configurare `.env.local` usando i nomi in `.env.example`, poi eseguire `npm inst
 1. Autorizzare FIC con `entity.suppliers:r received_documents:a`. Le precedenti sessioni in sola lettura richiedono un nuovo consenso tramite "Autorizza spese".
 2. Selezionare l'azienda, caricare i PDF, correggere e approvare i dati.
 3. Per una fattura approvata in EUR, scegliere "Prepara spesa".
-4. Selezionare il fornitore gia presente in FIC, indicare deducibilita del costo, detraibilita IVA e scadenza. Nessuna percentuale fiscale viene scelta automaticamente.
-5. Verificare l'anteprima, spuntare la conferma e premere "Conferma e crea spesa".
+4. Il fornitore gia presente in FIC viene preselezionato solo se esiste un unico VAT corrispondente. Per i fornitori SaaS supportati viene proposto, su richiesta dell'utente, il profilo modificabile 100% deducibilita costo / 100% detraibilita IVA. Non e una verifica del diritto fiscale del contribuente. Controllare la scadenza, inizialmente proposta dalla data fattura.
+5. Le percentuali sono modificabili in "Impostazioni fiscali del fornitore". "Salva impostazioni" conserva solo le preferenze nel browser, separate per azienda e fornitore FIC; le preferenze salvate prevalgono sui valori proposti. PDF, fatture e bozze restano esclusivamente in memoria. Un altro browser o la cancellazione dei dati locali richiede una nuova configurazione.
+6. "Controlla spesa" verifica anche i duplicati e mostra l'anteprima. "Conserva bozza" mantiene il lavoro nella pagina, senza registrare nulla in FIC. Le bozze con percentuali mancanti sono contrassegnate "Dati fiscali da confermare" e non ricevono un ticket di invio. Una modifica alla fattura annulla la bozza e l'approvazione.
+7. Per registrare una spesa con dati completi, verificare l'anteprima, spuntare la conferma e premere "Conferma e crea spesa".
+
+Per i fornitori SaaS riconosciuti senza IVA addebitata e senza VAT italiano viene visualizzato **TD17 proposto**, che resta da verificare e preparare separatamente. Non viene creato un documento TD17, non si applica automaticamente un'aliquota del 22% e non si invia nulla allo SDI. Nessuna proposta TD17 viene fatta per un fornitore sconosciuto o una fattura con IVA addebitata. GitHub non e ancora un parser supportato.
 
 La spesa viene registrata con pagamento **non pagato** e contrassegnata in FIC. Il documento non e una bozza contabile: il comando finale crea una spesa reale. Eventuali pagamenti gia effettuati vanno aggiornati in FIC. Nessun PDF viene trasferito o salvato; l'allegato resta escluso da questa fase. Nessun invio SDI, reverse charge o TD17/TD18 viene effettuato. Queste operazioni restano un passaggio separato. Le valute diverse da EUR non sono ancora abilitate alla creazione.
 
