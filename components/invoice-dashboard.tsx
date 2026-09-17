@@ -14,11 +14,14 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { InvoiceFields, InvoiceStatus, ParsedInvoice, SupportedSupplier } from "@/lib/types";
+import { invoiceErrors } from "@/lib/expense-validation";
+import { ExpenseDialog } from "@/components/expense-dialog";
 
 const SUPPLIERS: SupportedSupplier[] = ["OpenAI", "Anthropic", "Vercel", "Hetzner", "Supabase", "Sconosciuto"];
 
 type UiInvoice = ParsedInvoice & {
   id: string;
+  ficId?: number;
 };
 
 type UploadState = "idle" | "dragging" | "uploading" | "error";
@@ -57,6 +60,10 @@ export function InvoiceDashboard() {
   const [error, setError] = useState("");
   const [ficStatus, setFicStatus] = useState<FicStatus | null>(null);
   const [ficBusy, setFicBusy] = useState(false);
+  const [companyId, setCompanyId] = useState("");
+  const [expenseId, setExpenseId] = useState<string | null>(null);
+  const expenseInvoice = invoices.find((item) => item.id === expenseId);
+  const canWrite = Boolean(ficStatus?.connected && ficStatus.scope?.split(/\s+/).includes("received_documents:rw"));
 
   const enrichedInvoices = useMemo(() => markDuplicates(invoices), [invoices]);
   const groups = useMemo(() => groupInvoices(enrichedInvoices), [enrichedInvoices]);
@@ -71,9 +78,18 @@ export function InvoiceDashboard() {
   }, []);
 
   async function refreshFicStatus() {
+    try {
     const response = await fetch("/api/fatture-in-cloud/status", { cache: "no-store" });
+    if (!response.ok) throw new Error("Impossibile verificare la connessione FIC.");
     const payload = (await response.json()) as FicStatus;
     setFicStatus(payload);
+    const companies = flattenCompanies(payload.companies).filter((item) => item.id && item.type !== "accountant");
+    setCompanyId((current) => companies.some((item) => String(item.id) === current) ? current : String(companies[0]?.id ?? ""));
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Connessione FIC non disponibile.");
+      setFicStatus(null);
+      setCompanyId("");
+    }
   }
 
   async function disconnectFic() {
@@ -123,11 +139,11 @@ export function InvoiceDashboard() {
   function updateInvoice(id: string, field: keyof InvoiceFields, rawValue: string) {
     setInvoices((current) =>
       current.map((item) => {
-        if (item.id !== id) return item;
+        if (item.id !== id || item.ficId) return item;
         const value = field.endsWith("_amount") ? parseEditableNumber(rawValue) : rawValue;
         return {
           ...item,
-          status: item.status === "approved" ? "approved" : "needs_review",
+          status: "needs_review",
           invoice: {
             ...item.invoice,
             [field]: value,
@@ -138,14 +154,20 @@ export function InvoiceDashboard() {
   }
 
   function approveInvoice(id: string) {
+    const candidate = enrichedInvoices.find((item) => item.id === id);
+    if (!candidate || candidate.status === "duplicate" || candidate.ficId) return;
+    const errors = invoiceErrors(candidate.invoice);
+    if (errors.length) { setError(errors.join(" ")); return; }
+    setError("");
     setInvoices((current) =>
       current.map((item) => (item.id === id ? { ...item, status: "approved" as InvoiceStatus } : item)),
     );
   }
 
   function approveAll() {
+    const eligible = new Set(enrichedInvoices.filter((item) => item.status !== "duplicate" && !item.ficId && invoiceErrors(item.invoice).length === 0).map((item) => item.id));
     setInvoices((current) =>
-      current.map((item) => (item.status === "duplicate" ? item : { ...item, status: "approved" as InvoiceStatus })),
+      current.map((item) => (eligible.has(item.id) ? { ...item, status: "approved" as InvoiceStatus } : item)),
     );
   }
 
@@ -156,7 +178,7 @@ export function InvoiceDashboard() {
           <div>
             <div className="mb-3 inline-flex items-center gap-2 rounded-md border border-line bg-white px-3 py-1.5 text-sm text-slate-600">
               <FileText size={16} />
-              MVP Fase 1
+              Revisione e spese
             </div>
             <h1 className="text-3xl font-semibold tracking-normal text-ink">Invoice to FIC</h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
@@ -187,6 +209,9 @@ export function InvoiceDashboard() {
           status={ficStatus}
           onDisconnect={disconnectFic}
           onRefresh={refreshFicStatus}
+          companyId={companyId}
+          onCompanyChange={setCompanyId}
+          canWrite={canWrite}
         />
 
         <section className="grid gap-5 lg:grid-cols-[minmax(340px,420px),1fr]">
@@ -263,7 +288,7 @@ export function InvoiceDashboard() {
             </div>
           </div>
 
-          <div className="rounded-lg border border-line bg-white shadow-panel">
+          <div className="min-w-0 rounded-lg border border-line bg-white shadow-panel">
             <div className="flex flex-col gap-3 border-b border-line p-4 md:flex-row md:items-center md:justify-between">
               <div>
                 <h2 className="text-lg font-semibold">Revisione fatture</h2>
@@ -305,6 +330,8 @@ export function InvoiceDashboard() {
                         }
                         onApprove={approveInvoice}
                         onChange={updateInvoice}
+                        canCreate={canWrite && Boolean(companyId)}
+                        onCreate={setExpenseId}
                       />
                     ))
                   ) : (
@@ -319,6 +346,13 @@ export function InvoiceDashboard() {
             </div>
           </div>
         </section>
+        {expenseInvoice && companyId && <ExpenseDialog
+          key={`${expenseInvoice.id}-${companyId}`}
+          invoice={expenseInvoice.invoice}
+          companyId={Number(companyId)}
+          onClose={() => setExpenseId(null)}
+          onCreated={(ficId) => setInvoices((current) => current.map((item) => item.id === expenseInvoice.id ? { ...item, ficId } : item))}
+        />}
       </div>
     </main>
   );
@@ -329,13 +363,19 @@ function FattureInCloudPanel({
   status,
   onDisconnect,
   onRefresh,
+  companyId,
+  onCompanyChange,
+  canWrite,
 }: {
   busy: boolean;
   status: FicStatus | null;
   onDisconnect: () => void;
   onRefresh: () => void;
+  companyId: string;
+  onCompanyChange: (id: string) => void;
+  canWrite: boolean;
 }) {
-  const companies = status ? flattenCompanies(status.companies) : [];
+  const companies = status ? flattenCompanies(status.companies).filter((item) => item.id && item.type !== "accountant") : [];
 
   return (
     <section className="rounded-lg border border-line bg-white p-4 shadow-panel">
@@ -348,12 +388,12 @@ function FattureInCloudPanel({
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-base font-semibold">Fatture in Cloud</h2>
               <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">
-                Invio disattivato
+                {canWrite ? "Spese con conferma" : "Sola lettura"}
               </span>
               <FicConnectionBadge status={status} />
             </div>
             <p className="mt-1 text-sm text-slate-600">
-              Connessione OAuth pronta per leggere aziende e preparare la fase spese, reverse charge e TD17/TD18.
+              {canWrite ? "Registrazione spese EUR disponibile. Invio SDI disattivato." : "Ricollega FIC per autorizzare la registrazione delle spese."}
             </p>
             {status?.config.configured ? (
               <p className="mt-2 text-xs text-slate-500">Scope: {status.config.scopes.join(", ")}</p>
@@ -367,7 +407,7 @@ function FattureInCloudPanel({
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           {status?.connected && companies.length ? (
-            <select className="h-10 min-w-56 rounded-md border border-line bg-white px-3 text-sm">
+            <select aria-label="Azienda Fatture in Cloud" value={companyId} onChange={(event) => onCompanyChange(event.target.value)} className="h-10 min-w-56 rounded-md border border-line bg-white px-3 text-sm">
               {companies.map((company) => (
                 <option key={`${company.id}-${company.name}`} value={company.id ?? ""}>
                   {company.name ?? `Azienda ${company.id ?? ""}`}
@@ -376,6 +416,7 @@ function FattureInCloudPanel({
             </select>
           ) : null}
           <div className="flex gap-2">
+            {status?.connected && !canWrite && <a className="inline-flex h-10 items-center gap-2 rounded-md bg-ink px-3 text-sm text-white" href="/api/fatture-in-cloud/connect"><Link2 size={16} />Autorizza spese</a>}
             <button
               className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-line px-3 text-sm font-medium hover:bg-slate-50"
               onClick={onRefresh}
@@ -444,11 +485,15 @@ function InvoiceRow({
   isGroupStart,
   onApprove,
   onChange,
+  canCreate,
+  onCreate,
 }: {
   invoice: UiInvoice;
   isGroupStart: boolean;
   onApprove: (id: string) => void;
   onChange: (id: string, field: keyof InvoiceFields, rawValue: string) => void;
+  canCreate: boolean;
+  onCreate: (id: string) => void;
 }) {
   const duplicate = invoice.status === "duplicate";
 
@@ -464,6 +509,7 @@ function InvoiceRow({
       <tr className={duplicate ? "bg-amber-50" : "border-t border-slate-100"}>
         <td className="px-4 py-3">
           <select
+            disabled={Boolean(invoice.ficId)}
             className="h-9 w-36 rounded-md border border-line bg-white px-2"
             value={invoice.invoice.supplier}
             onChange={(event) => onChange(invoice.id, "supplier", event.target.value)}
@@ -475,22 +521,23 @@ function InvoiceRow({
         </td>
         <td className="px-4 py-3">
           <Editable
+            disabled={Boolean(invoice.ficId)}
             inputClassName="w-44 font-mono text-[13px]"
             value={invoice.invoice.invoice_number}
             onChange={(value) => onChange(invoice.id, "invoice_number", value)}
           />
         </td>
         <td className="px-4 py-3">
-          <EditableDate value={invoice.invoice.invoice_date} onChange={(value) => onChange(invoice.id, "invoice_date", value)} />
+          <EditableDate disabled={Boolean(invoice.ficId)} value={invoice.invoice.invoice_date} onChange={(value) => onChange(invoice.id, "invoice_date", value)} />
         </td>
         <td className="px-4 py-3">
-          <Editable value={invoice.invoice.net_amount ?? ""} onChange={(value) => onChange(invoice.id, "net_amount", value)} />
+          <Editable disabled={Boolean(invoice.ficId)} value={invoice.invoice.net_amount ?? ""} onChange={(value) => onChange(invoice.id, "net_amount", value)} />
         </td>
         <td className="px-4 py-3">
-          <Editable value={invoice.invoice.tax_amount ?? ""} onChange={(value) => onChange(invoice.id, "tax_amount", value)} />
+          <Editable disabled={Boolean(invoice.ficId)} value={invoice.invoice.tax_amount ?? ""} onChange={(value) => onChange(invoice.id, "tax_amount", value)} />
         </td>
         <td className="px-4 py-3">
-          <Editable value={invoice.invoice.total_amount ?? ""} onChange={(value) => onChange(invoice.id, "total_amount", value)} />
+          <Editable disabled={Boolean(invoice.ficId)} value={invoice.invoice.total_amount ?? ""} onChange={(value) => onChange(invoice.id, "total_amount", value)} />
         </td>
         <td className="px-4 py-3">
           <StatusBadge status={invoice.status} />
@@ -499,7 +546,7 @@ function InvoiceRow({
         <td className="px-4 py-3">
           <button
             className="inline-flex h-9 items-center gap-2 rounded-md border border-line px-3 text-sm font-medium hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
-            disabled={duplicate}
+            disabled={duplicate || Boolean(invoice.ficId)}
             onClick={() => onApprove(invoice.id)}
             type="button"
             title={duplicate ? "Risolvi il duplicato prima di approvare" : "Approva fattura"}
@@ -507,6 +554,7 @@ function InvoiceRow({
             <Check size={16} />
             Approva
           </button>
+          {invoice.ficId ? <p className="mt-2 text-xs text-emerald-700">Registrata FIC #{invoice.ficId}</p> : <button type="button" disabled={!canCreate || invoice.status !== "approved" || invoice.invoice.currency !== "EUR"} onClick={() => onCreate(invoice.id)} className="mt-2 inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-md border border-line px-3 text-sm disabled:opacity-40"><Cloud size={16} />Prepara spesa</button>}
         </td>
       </tr>
       <tr className={duplicate ? "bg-amber-50/70" : "border-b border-slate-100 bg-white"}>
@@ -517,6 +565,7 @@ function InvoiceRow({
               <span>Valuta</span>
               <input
                 className="h-8 w-20 rounded-md border border-line px-2 uppercase"
+                disabled={Boolean(invoice.ficId)}
                 maxLength={3}
                 value={invoice.invoice.currency}
                 onChange={(event) => onChange(invoice.id, "currency", event.target.value.toUpperCase())}
@@ -526,6 +575,7 @@ function InvoiceRow({
               <span>VAT fornitore</span>
               <input
                 className="h-8 w-44 rounded-md border border-line px-2 uppercase"
+                disabled={Boolean(invoice.ficId)}
                 value={invoice.invoice.supplier_vat}
                 onChange={(event) => onChange(invoice.id, "supplier_vat", event.target.value.toUpperCase())}
               />
@@ -540,10 +590,12 @@ function InvoiceRow({
 }
 
 function Editable({
+  disabled = false,
   inputClassName = "w-32",
   value,
   onChange,
 }: {
+  disabled?: boolean;
   inputClassName?: string;
   value: string | number;
   onChange: (value: string) => void;
@@ -554,6 +606,7 @@ function Editable({
       <input
         className={`h-9 rounded-md border border-line pl-8 pr-2 ${inputClassName}`}
         title={String(value)}
+        disabled={disabled}
         value={value}
         onChange={(event) => onChange(event.target.value)}
       />
@@ -561,7 +614,7 @@ function Editable({
   );
 }
 
-function EditableDate({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+function EditableDate({ value, onChange, disabled = false }: { value: string; onChange: (value: string) => void; disabled?: boolean }) {
   function commit(element: HTMLInputElement) {
     const parsed = parseDisplayDate(element.value);
     if (parsed || element.value.trim() === "") {
@@ -575,6 +628,7 @@ function EditableDate({ value, onChange }: { value: string; onChange: (value: st
   return (
     <input
       key={value}
+      disabled={disabled}
       className="h-9 w-32 rounded-md border border-line px-2"
       defaultValue={formatDateForDisplay(value)}
       inputMode="numeric"
@@ -651,15 +705,15 @@ function markDuplicates(invoices: UiInvoice[]) {
         : "";
       const duplicate = Boolean(key && seen.has(key));
       if (key) seen.add(key);
-      return duplicate && item.status !== "approved"
+      return duplicate
         ? { ...item, status: "duplicate" as InvoiceStatus }
         : item;
     });
 }
 
 function parseEditableNumber(value: string) {
-  const normalized = value.replace(/\./g, "").replace(",", ".");
-  const parsed = Number.parseFloat(normalized);
+  const normalized = value.includes(",") ? value.replace(/\./g, "").replace(",", ".") : value;
+  const parsed = normalized.trim() ? Number(normalized) : NaN;
   return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : null;
 }
 

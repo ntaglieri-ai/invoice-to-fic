@@ -8,7 +8,7 @@ export type ReverseChargeMode = "none" | "td17" | "td18";
 export const FIC_API_BASE_URL = "https://api-v2.fattureincloud.it";
 export const FIC_SESSION_COOKIE = "fic_oauth_session";
 export const FIC_STATE_COOKIE = "fic_oauth_state";
-export const FIC_DEFAULT_SCOPES = ["entity.suppliers:r", "received_documents:r"] as const;
+export const FIC_DEFAULT_SCOPES = ["entity.suppliers:r", "received_documents:rw"] as const;
 
 export type FattureInCloudDraftExpense = {
   supplierName: string;
@@ -63,10 +63,6 @@ export function buildDraftExpense(invoice: InvoiceFields): FattureInCloudDraftEx
   };
 }
 
-export async function createExpenseDraft() {
-  throw new Error("Creazione spese Fatture in Cloud non ancora abilitata: serve conferma manuale prima dell'invio.");
-}
-
 export function getFattureInCloudConfigStatus(): FattureInCloudConfigStatus {
   const required = {
     FIC_CLIENT_ID: process.env.FIC_CLIENT_ID,
@@ -99,25 +95,28 @@ export function buildFattureInCloudAuthorizationUrl(state: string) {
 
 export async function exchangeAuthorizationCode(code: string): Promise<FattureInCloudOAuthSession> {
   const config = getRequiredConfig();
-  return requestToken({
+  const session = await requestToken({
     grant_type: "authorization_code",
     client_id: config.clientId,
     client_secret: config.clientSecret,
     redirect_uri: config.redirectUri,
     code,
   });
+  // OAuth omits scope when the granted set equals the requested set.
+  return { ...session, scope: session.scope ?? config.scopes.join(" ") };
 }
 
 export async function refreshFattureInCloudSession(
   session: FattureInCloudOAuthSession,
 ): Promise<FattureInCloudOAuthSession> {
   const config = getRequiredConfig();
-  return requestToken({
+  const refreshed = await requestToken({
     grant_type: "refresh_token",
     client_id: config.clientId,
     client_secret: config.clientSecret,
     refresh_token: session.refreshToken,
   });
+  return { ...refreshed, scope: refreshed.scope ?? session.scope };
 }
 
 export function shouldRefreshSession(session: FattureInCloudOAuthSession) {
@@ -136,6 +135,8 @@ export async function listUserCompanies(accessToken: string): Promise<FattureInC
 export async function ficFetch<T>(accessToken: string, path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(new URL(path, FIC_API_BASE_URL), {
     ...init,
+    cache: "no-store",
+    signal: init.signal ?? AbortSignal.timeout(20000),
     headers: {
       Accept: "application/json",
       Authorization: `Bearer ${accessToken}`,
@@ -183,7 +184,10 @@ export function unsealFattureInCloudSession(value: string): FattureInCloudOAuthS
 }
 
 function getConfiguredScopes() {
-  return process.env.FIC_SCOPES?.split(/\s+/).filter(Boolean) ?? [...FIC_DEFAULT_SCOPES];
+  return [...new Set([
+    ...(process.env.FIC_SCOPES?.split(/\s+/).filter(Boolean) ?? []),
+    ...FIC_DEFAULT_SCOPES,
+  ])].filter((scope) => scope !== "received_documents:r");
 }
 
 function getRequiredConfig() {
@@ -238,15 +242,20 @@ async function requestToken(body: Record<string, string>): Promise<FattureInClou
 
 async function parseFicResponse<T>(response: Response): Promise<T> {
   const text = await response.text();
-  const payload = text ? JSON.parse(text) : {};
+  let payload;
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`Risposta Fatture in Cloud non valida (${response.status}).`);
+  }
 
   if (!response.ok) {
     const message =
       payload?.error_description ??
       payload?.message ??
-      payload?.error ??
+      payload?.error?.message ??
       `Errore Fatture in Cloud ${response.status}`;
-    throw new Error(message);
+    throw new Error(typeof message === "string" ? message : `Errore Fatture in Cloud ${response.status}`);
   }
 
   return payload as T;
