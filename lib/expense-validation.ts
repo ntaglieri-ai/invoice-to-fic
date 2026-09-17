@@ -1,5 +1,7 @@
 import type { InvoiceFields } from "@/lib/types";
 
+export const EXPENSE_COST_CENTER = "WEB";
+
 export type ExpenseOptions = {
   supplierId: number;
   taxDeductibility: number;
@@ -86,6 +88,7 @@ export function buildExpensePayload(invoice: InvoiceFields, options: ExpenseOpti
   validateExpense(invoice, options);
   return {
     type: "expense" as const,
+    rc_center: EXPENSE_COST_CENTER,
     entity: { id: supplier.id, name: supplier.name },
     invoice_number: invoice.invoice_number.trim(),
     date: invoice.invoice_date,

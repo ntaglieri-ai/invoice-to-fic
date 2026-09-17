@@ -21,6 +21,9 @@ beforeEach(() => {
 });
 
 describe("expense validation and payload", () => {
+  it.each(["OpenAI", "Anthropic", "Vercel", "Hetzner", "Supabase"] as const)("assigns WEB to %s expenses", (name) => {
+    expect(buildExpensePayload({ ...invoice, supplier: name }, options, supplier).rc_center).toBe("WEB");
+  });
   it("preserves the invoice amounts and uses the explicitly chosen accounting settings", () => {
     const payload = buildExpensePayload(invoice, options, supplier);
     expect(payload).toMatchObject({ invoice_number: "IA8NO7NL-0095", date: "2026-08-31", amount_net: 13.21, amount_vat: 0, tax_deductibility: 75, vat_deductibility: 0, entity: { id: 8 }, payments_list: [{ amount: 13.21, due_date: "2026-09-30", status: "not_paid" }] });

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, Save, Send, Settings2, X } from "lucide-react";
 import type { InvoiceFields } from "@/lib/types";
-import { hasExpenseTaxSettings, type ExpensePreview, type FicSupplier, type PreparedExpense } from "@/lib/expense-validation";
+import { EXPENSE_COST_CENTER, hasExpenseTaxSettings, type ExpensePreview, type FicSupplier, type PreparedExpense } from "@/lib/expense-validation";
 import { expensePreferencesKey, matchExpenseSupplier, parseExpensePreferences, suggestedSaasPreferences, suggestedForeignDocument, type ExpenseTaxPreferences } from "@/lib/expense-preferences";
 
 async function expenseRequest(body: unknown) {
@@ -156,6 +156,7 @@ export function ExpenseDialog({ invoice, companyId, initialDraft, onClose, onPre
           {pending && <p role="status" className="border-l-2 border-amber-400 pl-3 text-sm text-amber-800">Dati fiscali da confermare. Bozza verificata, non registrata in Fatture in Cloud.</p>}
           <dl className="grid grid-cols-[auto,minmax(0,1fr)] gap-x-5 gap-y-2 text-sm [&_dd]:break-words">
             <dt>Azienda</dt><dd className="font-medium">{preview.companyName}</dd>
+            <dt>Centro di costo</dt><dd>{EXPENSE_COST_CENTER}</dd>
             <dt>Fornitore FIC</dt><dd>{preview.supplier.name} · {preview.supplier.vat_number || "VAT non presente"}</dd>
             <dt>Data</dt><dd>{invoice.invoice_date.split("-").reverse().join("/")}</dd>
             <dt>Imponibile / IVA</dt><dd>{invoice.net_amount?.toFixed(2)} / {invoice.tax_amount?.toFixed(2)} EUR</dd>
