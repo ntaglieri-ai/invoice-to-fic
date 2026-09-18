@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { googleFetch, type GoogleSession } from "@/lib/google-session";
 import { classifyMail, flattenParts, inRomeMonth, monthQuery, openaiInvoiceLink, type MailMessage } from "@/lib/mail-invoices";
-import { downloadOpenaiInvoice, MAX_PDF_BYTES } from "@/lib/invoice-link-download";
 import { parseInvoicePdf } from "@/lib/invoice-parser";
 import type { ParsedInvoice } from "@/lib/types";
 
 const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
+const MAX_PDF_BYTES = 10 * 1024 * 1024;
 const escapeQuery = (value: string) => value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 type DriveFile = { id: string; name: string; appProperties?: Record<string, string> };
 
@@ -123,6 +123,7 @@ export async function importGoogleInvoice(session: GoogleSession, messageId: str
     if (partId === "openai-link") {
       const link = candidate.supplier === "OpenAI" ? openaiInvoiceLink(message) : null;
       if (!link) throw new Error("Link fattura mancante.");
+      const { downloadOpenaiInvoice } = await import("@/lib/invoice-link-download");
       const buffer = await downloadOpenaiInvoice(link);
       const parsed = await parseInvoicePdf(buffer, "OpenAI.pdf");
       const number = parsed.invoice.invoice_number;
