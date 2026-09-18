@@ -43,6 +43,13 @@ it("scans without archiving anything", async () => {
   const r = await POST(request({ action: "scan", month: "2026-09" }));
   expect(r.status).toBe(200); expect(importGoogleInvoice).not.toHaveBeenCalled();
 });
+it("passes the selected supplier and cursor to Gmail search", async () => {
+  vi.mocked(scanGoogleInvoices).mockResolvedValue({ items: [], nextPageToken: null });
+  const r = await POST(request({ action: "scan", month: "2026-09", supplier: "Anthropic", pageToken: "next" }));
+  expect(r.status).toBe(200);
+  expect(scanGoogleInvoices).toHaveBeenCalledWith(session, "2026-09", "next", "Anthropic");
+  expect(importGoogleInvoice).not.toHaveBeenCalled();
+});
 it("disconnect clears cookies without deleting Drive files", async () => {
   const r = await POST(request({ action: "disconnect" }));
   expect(r.headers.get("set-cookie")).toContain("google=;");

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allowedInvoiceUrl, classifyMail, inRomeMonth, monthQuery, openaiInvoiceLink, type MailMessage } from "./mail-invoices";
+import { allowedInvoiceUrl, classifyMail, inRomeMonth, monthQuery, openaiInvoiceLink, supplierQuery, type MailMessage } from "./mail-invoices";
 import { browserHostAllowed } from "./invoice-link-download";
 
 function mail(from = "invoice+statements@vercel.com"): MailMessage {
@@ -9,6 +9,12 @@ function mail(from = "invoice+statements@vercel.com"): MailMessage {
   ] } };
 }
 describe("Gmail invoice candidates", () => {
+  it("builds supplier queries exclusively from trusted senders", () => {
+    expect(supplierQuery()).toBe("");
+    expect(supplierQuery("OpenAI")).toBe("{from:noreply@tm.openai.com}");
+    expect(supplierQuery("Anthropic")).toContain("from:invoice+statements@mail.anthropic.com");
+    for (const value of [null, 1, {}, "Unknown", "OpenAI OR label:Inbox"]) expect(() => supplierQuery(value)).toThrow("Fornitore non valido");
+  });
   it.each([["invoice+statements@vercel.com", "Vercel"], ["invoice+statements@mail.anthropic.com", "Anthropic"], ["invoice+statements@supabase.com", "Supabase"], ["billing@hetzner.com", "Hetzner"]])("recognizes %s and excludes receipt", (from, supplier) => {
     expect(classifyMail(mail(from))).toMatchObject({ supplier, invoices: [{ partId: "1" }], receipts: 1 });
   });

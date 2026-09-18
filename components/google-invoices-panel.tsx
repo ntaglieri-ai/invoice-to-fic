@@ -16,6 +16,7 @@ async function action(body: unknown) {
 
 export function GoogleInvoicesPanel({ onInvoice }: { onInvoice: (result: ArchivedInvoice) => void }) {
   const [status, setStatus] = useState<Status | null>(null);
+  const [supplier, setSupplier] = useState("");
   const [month, setMonth] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; });
   const [items, setItems] = useState<Item[]>([]);
   const [nextPage, setNextPage] = useState<string | null>(null);
@@ -30,7 +31,7 @@ export function GoogleInvoicesPanel({ onInvoice }: { onInvoice: (result: Archive
   async function scan(more = false) {
     setBusy("scan"); setError("");
     try {
-      const data = await action({ action: "scan", month, ...(more && nextPage ? { pageToken: nextPage } : {}) });
+      const data = await action({ action: "scan", month, supplier, ...(more && nextPage ? { pageToken: nextPage } : {}) });
       const rows = (data.items as MailCandidate[]).flatMap((mail) => {
         const files = mail.invoices.length ? mail.invoices : [{ partId: mail.linkAvailable ? "openai-link" : "", name: mail.linkAvailable ? "Fattura OpenAI (link)" : "Da verificare" }];
         return files.map((file) => ({ ...mail, partId: file.partId, fileName: file.name, key: `${mail.id}:${file.partId}` }));
@@ -66,11 +67,15 @@ export function GoogleInvoicesPanel({ onInvoice }: { onInvoice: (result: Archive
     {status?.connected && <>
       <div className="mt-4 flex flex-wrap items-end gap-3">
         <label className="text-sm">Mese ricezione mail<input aria-label="Mese ricezione mail" type="month" value={month} disabled={Boolean(busy)} onChange={(e) => { setMonth(e.target.value); setItems([]); setNextPage(null); setScanned(false); }} className="mt-1 block h-10 rounded-md border border-line bg-white px-3" /></label>
+        <label className="text-sm">Fornitore<select aria-label="Fornitore mail" value={supplier} disabled={Boolean(busy)} onChange={(e) => { setSupplier(e.target.value); setItems([]); setNextPage(null); setScanned(false); setError(""); }} className="mt-1 block h-10 w-44 max-w-full rounded-md border border-line bg-white px-3">
+          <option value="">Tutti</option>
+          {["OpenAI", "Anthropic", "Vercel", "Hetzner", "Supabase"].map((name) => <option key={name} value={name}>{name}</option>)}
+        </select></label>
         <button disabled={Boolean(busy) || !month} onClick={() => scan()} className="flex h-10 items-center gap-2 rounded-md border border-line bg-white px-3 text-sm disabled:opacity-50"><Search size={16} /> Cerca mail</button>
         <button disabled={Boolean(busy) || !items.some((i) => i.partId && !i.result)} onClick={() => importRows(items.filter((i) => i.partId && !i.result))} className="flex h-10 items-center gap-2 rounded-md bg-ink px-3 text-sm text-white disabled:opacity-50"><Download size={16} /> Importa fatture elencate</button>
         {busy && <span role="status" className="flex items-center gap-2 text-sm"><LoaderCircle className="animate-spin" size={16} /> {busy === "scan" ? "Ricerca mail" : "Operazione in corso"}</span>}
       </div>
-      {scanned && !items.length && <p className="mt-4 text-sm text-slate-500">Nessuna mail trovata per questo mese.</p>}
+      {scanned && !items.length && <p className="mt-4 text-sm text-slate-500">Nessuna mail trovata con i filtri selezionati.</p>}
       <ul className="mt-4 divide-y divide-line">
         {items.map((item) => <li key={item.key} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm">
           <div className="min-w-0 flex-1 basis-64 break-words"><p className="font-medium">{item.supplier} · {item.fileName}</p><p className="text-slate-500">{item.subject}</p>

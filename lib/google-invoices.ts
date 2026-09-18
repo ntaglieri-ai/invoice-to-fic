@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { googleFetch, type GoogleSession } from "@/lib/google-session";
-import { classifyMail, flattenParts, inRomeMonth, monthQuery, openaiInvoiceLink, type MailMessage } from "@/lib/mail-invoices";
+import { classifyMail, flattenParts, inRomeMonth, monthQuery, openaiInvoiceLink, supplierQuery, type MailMessage } from "@/lib/mail-invoices";
 import { parseInvoicePdf } from "@/lib/invoice-parser";
 import type { ParsedInvoice } from "@/lib/types";
 
@@ -18,15 +18,17 @@ async function labelId(session: GoogleSession) {
   return label.id;
 }
 
-export async function scanGoogleInvoices(session: GoogleSession, month: string, pageToken = "") {
+export async function scanGoogleInvoices(session: GoogleSession, month: string, pageToken = "", supplier: unknown = "") {
+  const query = [monthQuery(month), supplierQuery(supplier)].filter(Boolean).join(" ");
   const id = await labelId(session);
-  const params = new URLSearchParams({ labelIds: id, q: monthQuery(month), maxResults: "10" });
+  const params = new URLSearchParams({ labelIds: id, q: query, maxResults: "10" });
   if (pageToken) params.set("pageToken", pageToken);
   const page = await json<{ messages?: { id: string }[]; nextPageToken?: string }>(session, `/gmail/v1/users/me/messages?${params}`);
   const items = [];
   for (const item of page.messages ?? []) {
     const message = await json<MailMessage>(session, `/gmail/v1/users/me/messages/${encodeURIComponent(item.id)}?format=full`);
-    if (message.labelIds?.includes(id) && inRomeMonth(message, month)) items.push(classifyMail(message));
+    const candidate = classifyMail(message);
+    if (message.labelIds?.includes(id) && inRomeMonth(message, month) && (!supplier || candidate.supplier === supplier)) items.push(candidate);
   }
   return { items, nextPageToken: page.nextPageToken ?? null };
 }

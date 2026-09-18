@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     const stored = openGoogle<GoogleSession>(jar.get(GOOGLE_COOKIE)?.value);
     if (!stored) return reply({ error: "Collega Google prima di importare." }, 401);
     session = await freshGoogle(stored);
-    if (body.action === "scan" && typeof body.month === "string" && (body.pageToken === undefined || typeof body.pageToken === "string")) return reply(await scanGoogleInvoices(session, body.month, body.pageToken));
+    if (body.action === "scan" && typeof body.month === "string" && (body.pageToken === undefined || typeof body.pageToken === "string")) return reply(await scanGoogleInvoices(session, body.month, body.pageToken, body.supplier));
     if (body.action === "import" && typeof body.messageId === "string" && typeof body.partId === "string") return reply(await importGoogleInvoice(session, body.messageId, body.partId));
     return reply({ error: "Azione non valida." }, 400);
   } catch (error) {

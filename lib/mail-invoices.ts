@@ -9,6 +9,12 @@ const SENDERS: Record<string, SupportedSupplier> = {
   "noreply@tm.openai.com": "OpenAI", "invoice+statements@mail.anthropic.com": "Anthropic",
   "invoice+statements@vercel.com": "Vercel", "invoice+statements@supabase.com": "Supabase", "billing@hetzner.com": "Hetzner",
 };
+export function supplierQuery(supplier: unknown = "") {
+  if (supplier === "") return "";
+  const senders = Object.entries(SENDERS).filter(([, name]) => name === supplier).map(([sender]) => sender);
+  if (!senders.length) throw new Error("Fornitore non valido.");
+  return `{${senders.map((sender) => `from:${sender}`).join(" ")}}`;
+}
 export function flattenParts(part: MailPart): MailPart[] { return [part, ...(part.parts ?? []).flatMap(flattenParts)]; }
 export function mailHeader(message: MailMessage, name: string) { return message.payload.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? ""; }
 

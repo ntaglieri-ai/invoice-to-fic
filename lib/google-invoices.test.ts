@@ -44,6 +44,23 @@ it("scans only the label and retains pagination without Drive writes", async () 
   const list = vi.mocked(googleFetch).mock.calls.find((c) => c[1].includes("/messages?"))!;
   expect(list[1]).toContain("labelIds=saas"); expect(uploaded).toBeUndefined();
 });
+it("filters Gmail before pagination and keeps month and label restrictions", async () => {
+  const result = await scanGoogleInvoices(session, "2026-09", "cursor", "Hetzner");
+  expect(result.items).toHaveLength(1);
+  const path = vi.mocked(googleFetch).mock.calls.find((c) => c[1].includes("/messages?"))![1];
+  const params = new URLSearchParams(path.split("?")[1]);
+  expect(params.get("q")).toContain("{from:billing@hetzner.com}");
+  expect(params.get("q")).toContain("after:");
+  expect(params.get("labelIds")).toBe("saas");
+  expect(params.get("pageToken")).toBe("cursor");
+});
+it("excludes mismatching senders even if Gmail returns them", async () => {
+  expect((await scanGoogleInvoices(session, "2026-09", "", "OpenAI")).items).toEqual([]);
+});
+it("rejects invalid supplier filters before calling Google", async () => {
+  await expect(scanGoogleInvoices(session, "2026-09", "", "unknown")).rejects.toThrow("Fornitore non valido");
+  expect(googleFetch).not.toHaveBeenCalled();
+});
 it("archives a PDF with persistent metadata and restores it on a second import", async () => {
   const first = await importGoogleInvoice(session, "abc", "1");
   expect(first).toMatchObject({ driveId: "saved", duplicate: false });
