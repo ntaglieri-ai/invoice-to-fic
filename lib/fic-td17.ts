@@ -25,8 +25,13 @@ export async function td17Settings(token: string, companyId: number) {
   const response = await ficFetch<{ data?: PreInfo }>(token, `/c/${companyId}/issued_documents/info?type=self_supplier_invoice`);
   if (!Array.isArray(response.data?.vat_types_list)) throw new Error("Aliquote FIC non disponibili.");
   const vatTypes = response.data.vat_types_list.filter((vat) => vat && eligibleTd17Vat(vat));
-  if (!vatTypes.length) throw new Error("Nessuna aliquota IVA positiva abilitata alla fatturazione elettronica in FIC.");
-  return { vatTypes, paymentMethod: response.data.default_values?.payment_method?.ei_payment_method ?? "MP08" };
+  const warning = vatTypes.length ? undefined : "FIC non ha restituito aliquote IVA positive utilizzabili per il TD17. Verifica le aliquote in FIC; nessun documento creato.";
+  if (warning) console.warn("[td17:vat-settings] No eligible VAT rates", {
+    received: response.data.vat_types_list.length,
+    positive: response.data.vat_types_list.filter((vat) => vat && Number.isFinite(vat.value) && vat.value > 0).length,
+    explicitlyExcluded: response.data.vat_types_list.filter((vat) => vat && (vat.e_invoice === false || vat.is_disabled === true)).length,
+  });
+  return { vatTypes, warning, paymentMethod: response.data.default_values?.payment_method?.ei_payment_method ?? "MP08" };
 }
 
 async function td17Supplier(token: string, companyId: number, invoice: InvoiceFields, id: number): Promise<Td17Supplier> {

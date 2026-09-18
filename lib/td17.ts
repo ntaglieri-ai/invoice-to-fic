@@ -3,7 +3,7 @@ import { EXPENSE_COST_CENTER, invoiceErrors, isValidInvoiceDate, normalizeIdenti
 
 export type Td17Options = { supplierId: number; documentDate: string; vatId: number; numeration: string; paymentMethod: string };
 export type Td17Supplier = FicSupplier & { vat_number: string; country: string; address_street: string; address_city: string; address_postal_code: string; address_province?: string; address_extra?: string };
-export type Td17Vat = { id: number; value: number; description?: string; e_invoice?: boolean; is_disabled?: boolean; ei_type?: string };
+export type Td17Vat = { id: number; value: number; description?: string | null; e_invoice?: boolean | null; is_disabled?: boolean | null; ei_type?: string | null };
 export type Td17Result = { id: number; number?: number; numeration?: string; alreadyExists: boolean; eiStatus: string; xmlValid: boolean | null; warning?: string };
 export type Td17Preview = {
   ticket: string; companyName: string; expenseId: number; supplier: Td17Supplier;
@@ -25,7 +25,11 @@ export function validateTd17(invoice: InvoiceFields, options: Td17Options) {
 }
 
 export function eligibleTd17Vat(vat: Td17Vat) {
-  return Number.isSafeInteger(vat.id) && vat.id >= 0 && Number.isFinite(vat.value) && vat.value > 0 && vat.value <= 100 && vat.e_invoice === true && vat.is_disabled !== true && (!vat.ei_type || vat.ei_type === "0");
+  // Pre-create info can omit these nullable flags. Absence is not an explicit ban.
+  const electronic = vat.e_invoice == null || vat.e_invoice === true;
+  const enabled = vat.is_disabled == null || vat.is_disabled === false;
+  const ordinary = vat.ei_type == null || (typeof vat.ei_type === "string" && ["", "0"].includes(vat.ei_type.trim()));
+  return Number.isSafeInteger(vat.id) && vat.id >= 0 && Number.isFinite(vat.value) && vat.value > 0 && vat.value <= 100 && electronic && enabled && ordinary;
 }
 
 export function td17Amounts(net: number, rate: number) {

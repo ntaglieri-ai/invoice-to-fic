@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/fatture-in-cloud", () => ({ ficFetch: vi.fn(), listUserCompanies: vi.fn() }));
 import { ficFetch, listUserCompanies } from "@/lib/fatture-in-cloud";
-import { createTd17, findExistingTd17, previewTd17, readTd17Ticket, signTd17Ticket } from "@/lib/fic-td17";
-import { buildTd17Payload, td17Amounts, validateTd17, type Td17Options, type Td17Supplier } from "@/lib/td17";
+import { createTd17, findExistingTd17, previewTd17, readTd17Ticket, signTd17Ticket, td17Settings } from "@/lib/fic-td17";
+import { buildTd17Payload, eligibleTd17Vat, td17Amounts, validateTd17, type Td17Options, type Td17Supplier } from "@/lib/td17";
 import type { InvoiceFields } from "@/lib/types";
 
 const invoice: InvoiceFields = { supplier: "OpenAI", invoice_number: "IA8NO7NL-0094", invoice_date: "2026-08-31", currency: "EUR", net_amount: 12.82, tax_amount: 0, total_amount: 12.82, supplier_vat: "IE4143435AH" };
@@ -56,6 +56,33 @@ async function ticket() {
 }
 
 describe("TD17 payload", () => {
+  it.each([
+    { id: 0, value: 22 },
+    { id: 0, value: 22, e_invoice: null, is_disabled: null, ei_type: null },
+    { id: 0, value: 22, e_invoice: true, is_disabled: false, ei_type: "0" },
+  ])("accepts ordinary positive VAT with optional FIC metadata: %j", (rate) => {
+    expect(eligibleTd17Vat(rate)).toBe(true);
+    expect(buildTd17Payload(invoice, options, supplier, rate, "marker").items_list[0].vat.id).toBe(0);
+  });
+  it.each([
+    { id: 0, value: 22, e_invoice: false },
+    { id: 0, value: 22, is_disabled: true },
+    { id: 0, value: 22, ei_type: "N6.9" },
+    { id: 0, value: 0 }, { id: -1, value: 22 }, { id: 0, value: NaN },
+  ])("still rejects incompatible VAT: %j", (rate) => {
+    expect(eligibleTd17Vat(rate)).toBe(false);
+  });
+  it("loads nullable pre-create metadata without losing the 22 percent rate", async () => {
+    vi.mocked(ficFetch).mockResolvedValueOnce({ data: { vat_types_list: [{ id: 0, value: 22, e_invoice: null, is_disabled: null, ei_type: null }] } });
+    expect(await td17Settings("token", 123)).toMatchObject({ vatTypes: [{ id: 0, value: 22 }], warning: undefined });
+  });
+  it("returns an actionable warning instead of failing the entire settings response", async () => {
+    const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      vi.mocked(ficFetch).mockResolvedValueOnce({ data: { vat_types_list: [{ id: 0, value: 22, e_invoice: false }] } });
+      expect(await td17Settings("token", 123)).toMatchObject({ vatTypes: [], warning: expect.any(String) });
+    } finally { log.mockRestore(); }
+  });
   it("uses the foreign supplier as seller, preserves references, integrates VAT and reverses the extra payment", () => {
     const payload = buildTd17Payload(invoice, options, supplier, vat, "marker");
     expect(payload).toMatchObject({ type: "self_supplier_invoice", entity: supplier, e_invoice: true, rc_center: "WEB", numeration: "/TD17", payments_list: [{ amount: 15.64, status: "reversed" }], items_list: [{ net_price: 12.82, vat: { id: 0 } }] });

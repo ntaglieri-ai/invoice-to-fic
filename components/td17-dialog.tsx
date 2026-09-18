@@ -35,10 +35,11 @@ export function Td17Dialog({ invoice, companyId, onClose, onCreated }: {
   useEffect(() => {
     dialog.current?.showModal();
     let cancelled = false;
-    requestTd17({ action: "settings", companyId }).then((data: { suppliers: FicSupplier[]; vatTypes: Td17Vat[]; paymentMethod: string }) => {
+    requestTd17({ action: "settings", companyId }).then((data: { suppliers: FicSupplier[]; vatTypes: Td17Vat[]; paymentMethod: string; warning?: string }) => {
       if (cancelled) return;
       setSuppliers(data.suppliers);
       setVats(data.vatTypes);
+      setError(data.warning ?? "");
       const matches = data.vatTypes.filter((vat) => vat.value === 22);
       setOptions((current) => ({ ...current, supplierId: matchExpenseSupplier(data.suppliers, invoice.supplier_vat)?.id ?? 0, vatId: matches.length === 1 ? matches[0].id : -1, paymentMethod: data.paymentMethod }));
     }).catch((error) => { if (!cancelled) setError(error.message); }).finally(() => { if (!cancelled) setBusy(false); });
