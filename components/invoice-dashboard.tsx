@@ -17,6 +17,8 @@ import type { InvoiceFields, InvoiceStatus, ParsedInvoice, SupportedSupplier } f
 import { invoiceErrors, type PreparedExpense } from "@/lib/expense-validation";
 import { ExpenseDialog } from "@/components/expense-dialog";
 import { Td17Dialog } from "@/components/td17-dialog";
+import { GoogleInvoicesPanel } from "@/components/google-invoices-panel";
+import { currencyTotals } from "@/lib/invoice-totals";
 import { canPrepareTd17, canWriteExpenses, ficConnectionNotice } from "@/lib/fic-permissions";
 
 const SUPPLIERS: SupportedSupplier[] = ["OpenAI", "Anthropic", "Vercel", "Hetzner", "Supabase", "Sconosciuto"];
@@ -51,12 +53,6 @@ type FicStatus = {
   error?: string;
 };
 
-const moneyFormatter = new Intl.NumberFormat("it-IT", {
-  style: "currency",
-  currency: "EUR",
-  currencyDisplay: "narrowSymbol",
-});
-
 export function InvoiceDashboard() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [invoices, setInvoices] = useState<UiInvoice[]>([]);
@@ -76,7 +72,7 @@ export function InvoiceDashboard() {
   const enrichedInvoices = useMemo(() => markDuplicates(invoices), [invoices]);
   const groups = useMemo(() => groupInvoices(enrichedInvoices), [enrichedInvoices]);
   const globalTotal = useMemo(
-    () => enrichedInvoices.reduce((sum, item) => sum + (item.invoice.total_amount ?? 0), 0),
+    () => currencyTotals(enrichedInvoices),
     [enrichedInvoices],
   );
   const approvedCount = enrichedInvoices.filter((item) => item.status === "approved").length;
@@ -200,7 +196,7 @@ export function InvoiceDashboard() {
             <div className="grid grid-cols-3 gap-3 text-sm">
               <Metric label="Fatture" value={String(enrichedInvoices.length)} />
               <Metric label="Approvate" value={`${approvedCount}/${enrichedInvoices.length}`} />
-              <Metric label="Totale" value={formatMoney(globalTotal)} />
+              <Metric label="Totali" value={globalTotal} />
             </div>
             <form action="/api/auth/logout" method="post">
               <button
@@ -213,6 +209,7 @@ export function InvoiceDashboard() {
             </form>
           </div>
         </header>
+        <GoogleInvoicesPanel onInvoice={(result) => setInvoices((current) => current.some((item) => item.id === `drive-${result.driveId}`) ? current : [...current, { ...result.invoice, id: `drive-${result.driveId}` }])} />
 
         {ficNotice && <p role={ficNotice.error ? "alert" : "status"} className={`rounded-md border p-4 text-sm ${ficNotice.error ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-800"}`}>{ficNotice.message}</p>}
         <FattureInCloudPanel
@@ -289,7 +286,7 @@ export function InvoiceDashboard() {
                         <p className="font-medium">{group.supplier}</p>
                         <p className="text-xs text-slate-500">{group.count} fatture</p>
                       </div>
-                      <p className="font-semibold">{formatMoney(group.total)}</p>
+                      <p className="font-semibold">{currencyTotals(enrichedInvoices.filter((item) => item.invoice.supplier === group.supplier))}</p>
                     </div>
                   ))
                 ) : (
@@ -714,14 +711,12 @@ function flattenCompanies(companies: FicCompany[]): FicCompany[] {
 }
 
 function groupInvoices(invoices: UiInvoice[]) {
-  const bySupplier = new Map<SupportedSupplier, { supplier: SupportedSupplier; total: number; count: number }>();
+  const bySupplier = new Map<SupportedSupplier, { supplier: SupportedSupplier; count: number }>();
   invoices.forEach((item) => {
     const current = bySupplier.get(item.invoice.supplier) ?? {
       supplier: item.invoice.supplier,
-      total: 0,
       count: 0,
     };
-    current.total += item.invoice.total_amount ?? 0;
     current.count += 1;
     bySupplier.set(item.invoice.supplier, current);
   });
@@ -771,8 +766,4 @@ function parseDisplayDate(value: string) {
   }
 
   return "";
-}
-
-function formatMoney(value: number) {
-  return moneyFormatter.format(value);
 }

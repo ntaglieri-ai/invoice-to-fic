@@ -2,6 +2,10 @@
 
 Dashboard Next.js per estrazione e revisione di fatture PDF SaaS, collegamento OAuth e registrazione manualmente confermata delle spese in Fatture in Cloud.
 
+## Raccolta Gmail e Drive
+
+Importazione manuale dall'etichetta **Fatture SaaS**, archivio PDF su Drive e recupero OpenAI tramite browser isolato. [Configurazione Google e limiti](docs/google-import.md). Richiede credenziali OAuth Google: senza configurazione la sezione resta disattivata. Nessuna importazione programmata o invio FIC automatico. I PDF importati da Gmail sono persistenti su Drive; le revisioni della dashboard rimangono temporanee.
+
 ## Avvio
 
 Configurare `.env.local` usando i nomi in `.env.example`, poi eseguire `npm install` e `npm run dev`. Non committare credenziali o PDF. `npm test`, `npm run lint`, `npm run typecheck` e `npm run build` verificano il progetto.
@@ -12,13 +16,13 @@ Configurare `.env.local` usando i nomi in `.env.example`, poi eseguire `npm inst
 2. Selezionare l'azienda, caricare i PDF, correggere e approvare i dati.
 3. Per una fattura approvata in EUR, scegliere "Prepara spesa".
 4. Il fornitore gia presente in FIC viene preselezionato solo se esiste un unico VAT corrispondente. Per i fornitori SaaS supportati viene proposto, su richiesta dell'utente, il profilo modificabile 100% deducibilita costo / 100% detraibilita IVA. Non e una verifica del diritto fiscale del contribuente. Controllare la scadenza, inizialmente proposta dalla data fattura.
-5. Le percentuali sono modificabili in "Impostazioni fiscali del fornitore". "Salva impostazioni" conserva solo le preferenze nel browser, separate per azienda e fornitore FIC; le preferenze salvate prevalgono sui valori proposti. PDF, fatture e bozze restano esclusivamente in memoria. Un altro browser o la cancellazione dei dati locali richiede una nuova configurazione.
+5. Le percentuali sono modificabili in "Impostazioni fiscali del fornitore". "Salva impostazioni" conserva solo le preferenze nel browser, separate per azienda e fornitore FIC; le preferenze salvate prevalgono sui valori proposti. PDF caricati manualmente, revisioni e bozze restano in memoria; l'importazione Gmail archivia invece i PDF su Drive. Un altro browser o la cancellazione dei dati locali richiede una nuova configurazione.
 6. "Controlla spesa" verifica anche i duplicati e mostra l'anteprima. "Conserva bozza" mantiene il lavoro nella pagina, senza registrare nulla in FIC. Le bozze con percentuali mancanti sono contrassegnate "Dati fiscali da confermare" e non ricevono un ticket di invio. Una modifica alla fattura annulla la bozza e l'approvazione.
 7. Per registrare una spesa con dati completi, verificare l'anteprima, spuntare la conferma e premere "Conferma e crea spesa".
 
 Per i fornitori SaaS riconosciuti senza IVA addebitata e senza VAT italiano viene visualizzato **TD17 proposto**, da preparare con il flusso separato descritto sotto. Nessuna proposta TD17 viene fatta per un fornitore sconosciuto o una fattura con IVA addebitata. GitHub non e ancora un parser supportato.
 
-La spesa viene registrata con pagamento **non pagato**, centro WEB e contrassegnata in FIC. Il documento non e una bozza contabile: il comando finale crea una spesa reale. Eventuali pagamenti gia effettuati vanno aggiornati in FIC. Nessun PDF viene trasferito o salvato; l'allegato resta escluso da questa fase. Le valute diverse da EUR non sono ancora abilitate alla creazione.
+La spesa viene registrata con pagamento **non pagato**, centro WEB e contrassegnata in FIC. Il documento non e una bozza contabile: il comando finale crea una spesa reale. Eventuali pagamenti gia effettuati vanno aggiornati in FIC. Nessun PDF viene trasferito a FIC; l'allegato resta escluso dalla registrazione della spesa. Le valute diverse da EUR non sono ancora abilitate alla creazione.
 
 ## TD17 non inviato
 
