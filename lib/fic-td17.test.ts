@@ -56,6 +56,23 @@ async function ticket() {
 }
 
 describe("TD17 payload", () => {
+  it("sets the Italian buyer's FIC routing code on the document, not on the supplier registry", () => {
+    const payload = buildTd17Payload(invoice, options, supplier, vat, "marker");
+    expect(payload.entity.ei_code).toBe("M5UXCR1");
+    expect(supplier).not.toHaveProperty("ei_code");
+  });
+  it("rejects the actual 64-character OpenAI address without truncating it", () => {
+    const address = "1st Floor, The Liffey Trust Center, 117-126 Sheriff Street Upper";
+    expect(address.length).toBe(64);
+    expect(() => buildTd17Payload(invoice, options, { ...supplier, address_street: address }, vat, "marker")).toThrow("massimo 60 caratteri");
+    const corrected = "1st Floor, Liffey Trust Center, 117-126 Sheriff Street Upper";
+    expect(corrected.length).toBe(60);
+    expect(buildTd17Payload(invoice, options, { ...supplier, address_street: corrected }, vat, "marker").entity.address_street).toBe(corrected);
+  });
+  it("rejects invalid city length and address line breaks", () => {
+    expect(() => buildTd17Payload(invoice, options, { ...supplier, address_city: "X".repeat(61) }, vat, "marker")).toThrow("Comune");
+    expect(() => buildTd17Payload(invoice, options, { ...supplier, address_street: "Street\nUpper" }, vat, "marker")).toThrow("Indirizzo");
+  });
   it.each([
     { id: 0, value: 22 },
     { id: 0, value: 22, e_invoice: null, is_disabled: null, ei_type: null },

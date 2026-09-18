@@ -44,6 +44,11 @@ export function validateTd17Supplier(invoice: InvoiceFields, supplier: Td17Suppl
     !supplier.address_street?.trim() || !supplier.address_city?.trim()) {
     throw new Error("Completa in FIC l'anagrafica estera del fornitore (VAT/Tax ID coincidente, paese, indirizzo e citta), poi riprova.");
   }
+  for (const [label, value] of [["Indirizzo", supplier.address_street], ["Comune", supplier.address_city]]) {
+    if (Array.from(value).length > 60 || /[\r\n\t]/.test(value)) {
+      throw new Error(`${label} del fornitore non valido per XML: massimo 60 caratteri, senza ritorni a capo. Correggi l'anagrafica in FIC; nessun TD17 creato.`);
+    }
+  }
 }
 
 export function buildTd17Payload(invoice: InvoiceFields, options: Td17Options, supplier: Td17Supplier, vat: Td17Vat, reference: string) {
@@ -53,7 +58,8 @@ export function buildTd17Payload(invoice: InvoiceFields, options: Td17Options, s
   const amounts = td17Amounts(invoice.net_amount!, vat.value);
   return {
     type: "self_supplier_invoice" as const,
-    entity: supplier,
+    // TD17 is received by the Italian buyer through FIC, not by the foreign supplier.
+    entity: { ...supplier, ei_code: "M5UXCR1" },
     date: options.documentDate,
     year: Number(options.documentDate.slice(0, 4)),
     numeration: options.numeration,
