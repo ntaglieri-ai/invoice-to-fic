@@ -56,6 +56,20 @@ async function ticket() {
 }
 
 describe("TD17 payload", () => {
+  it.each([undefined, "IT99999999999"])("blocks Anthropic with unverified customer VAT %s", async (customer_vat) => {
+    vi.mocked(listUserCompanies).mockResolvedValue([{ id: 123, name: "Test Company", type: "company", vat_number: "12345678901" }]);
+    source = { ...source, supplier: "Anthropic", customer_vat };
+    await expect(previewTd17("token", 123, source, options, "owner")).rejects.toThrow("Partita IVA cliente");
+    expect(ficFetch).not.toHaveBeenCalled();
+  });
+  it("rechecks customer VAT against the company before TD17 creation", async () => {
+    source = { ...source, supplier: "Anthropic", customer_vat: "IT12345678901" };
+    vi.mocked(listUserCompanies).mockResolvedValue([{ id: 123, name: "Test Company", type: "company", vat_number: "12345678901" }]);
+    const approved = await ticket();
+    vi.mocked(listUserCompanies).mockResolvedValue([{ id: 123, name: "Test Company", type: "company", vat_number: "99999999999" }]);
+    await expect(createTd17("token", approved)).rejects.toThrow("Partita IVA cliente diversa");
+    expect(writes()).toHaveLength(0);
+  });
   it("sets the Italian buyer's FIC routing code on the document, not on the supplier registry", () => {
     const payload = buildTd17Payload(invoice, options, supplier, vat, "marker");
     expect(payload.entity.ei_code).toBe("M5UXCR1");

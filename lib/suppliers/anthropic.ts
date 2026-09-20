@@ -7,12 +7,17 @@ export const anthropicParser: SupplierParser = {
     return includesAny(text, ["Anthropic", "anthropic.com", "Claude"]);
   },
   parse(text) {
+    text = text.replace(/\u0000/g, "-");
     return completeResult("Anthropic", text, {
+      supplier_vat: firstMatch(text.split(/\bBill\s+to\b/i)[0], [
+        /\bVAT\s*(?:Registration\s*EU\s*VAT)?\s*[-:]?\s*(IE\d{7}[A-Z]{1,2})\b/i,
+      ]),
       invoice_number: firstMatch(text, [
         /Invoice\s+(?:number|#)\s*[:#]?\s*([A-Z0-9-]+)/i,
         /Number\s*[:#]?\s*([A-Z0-9-]{5,})/i,
       ]),
       invoice_date: parseDate(text, [
+        /Date\s+of\s+issue\s*[:#]?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i,
         /Invoice\s+date\s*[:#]?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i,
         /Date\s*[:#]?\s*(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})/i,
       ]),

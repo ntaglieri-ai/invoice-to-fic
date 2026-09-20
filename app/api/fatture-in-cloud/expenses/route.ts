@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { requireCustomerVat } from "@/lib/customer-vat";
 import { NextResponse } from "next/server";
 import { APP_AUTH_COOKIE, verifyAppSessionCookieValue } from "@/lib/simple-auth";
 import { FIC_SESSION_COOKIE, refreshFattureInCloudSession, sealFattureInCloudSession, shouldRefreshSession, unsealFattureInCloudSession } from "@/lib/fatture-in-cloud";
@@ -43,6 +44,7 @@ export async function POST(request: Request) {
     if (body.action !== "preview" || body.approved !== true) return respond({ error: "Approva la fattura prima dell'anteprima." }, 400);
     validateExpensePreparation(body.invoice, body.options);
     const invoice = body.invoice;
+    requireCustomerVat(invoice, company.vat_number);
     const options = body.options as ExpensePreparationOptions;
     const supplier = await requireSupplier(token, body.companyId, invoice, options);
     const duplicate = await findExistingExpense(token, body.companyId, invoice, supplier);

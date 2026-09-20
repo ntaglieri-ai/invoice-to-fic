@@ -17,6 +17,7 @@ export type InvoiceFields = {
   tax_amount: number | null;
   total_amount: number | null;
   supplier_vat: string;
+  customer_vat?: string;
 };
 
 export type ParsedInvoice = {

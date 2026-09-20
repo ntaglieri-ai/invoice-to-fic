@@ -1,4 +1,5 @@
 import "server-only";
+import { requireCustomerVat } from "@/lib/customer-vat";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { ficFetch, listUserCompanies, type FattureInCloudCompany } from "@/lib/fatture-in-cloud";
 import { buildExpensePayload, normalizeIdentifier, validateExpense, type ExpenseOptions, type FicSupplier } from "@/lib/expense-validation";
@@ -96,7 +97,8 @@ export async function createReviewedExpense(token: string, ticket: ExpenseTicket
   activeWrites.set(key, now + 24 * 60 * 60 * 1000);
   let writeStarted = false;
   try {
-    await requireCompany(token, companyId);
+    const company = await requireCompany(token, companyId);
+    requireCustomerVat(invoice, company.vat_number);
     const supplier = await requireSupplier(token, companyId, invoice, options);
     const duplicate = await findExistingExpense(token, companyId, invoice, supplier);
     if (duplicate) return { id: duplicate.id, alreadyExists: true };

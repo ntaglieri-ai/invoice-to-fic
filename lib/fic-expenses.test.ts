@@ -64,6 +64,13 @@ describe("manual confirmation ticket", () => {
 });
 
 describe("duplicate protection and expense creation", () => {
+  it.each([undefined, "IT99999999999"])("blocks Anthropic customer VAT %s before any write", async (customer_vat) => {
+    vi.mocked(listUserCompanies).mockResolvedValue([{ id: 123, name: "Test company", type: "company", vat_number: "12345678901" }]);
+    const value = ticket(`CUSTOMER-${customer_vat}`);
+    value.invoice = { ...value.invoice, supplier: "Anthropic", customer_vat };
+    await expect(createReviewedExpense("test", value)).rejects.toThrow("Partita IVA cliente");
+    expect(ficFetch).not.toHaveBeenCalled();
+  });
   it("checks subsequent pages and identifies the supplier plus complete invoice number", async () => {
     vi.mocked(ficFetch).mockResolvedValueOnce(page([{ id: 1, invoice_number: invoice.invoice_number, entity: { id: 99, name: "Other" } }], 2))
       .mockResolvedValueOnce(page([{ id: 2, invoice_number: " ia8no7nl-0095 ", entity: supplier }], 2));

@@ -1,4 +1,5 @@
 import pdf from "pdf-parse";
+import { extractCustomerVat } from "@/lib/customer-vat";
 import { EMPTY_INVOICE, completeResult, firstAmount, firstMatch, parseCurrency, parseDate, parseVat } from "@/lib/suppliers/common";
 import { supplierParsers } from "@/lib/suppliers";
 import type { ParsedInvoice, SupplierParserResult } from "@/lib/types";
@@ -27,6 +28,10 @@ export function parseInvoiceText(text: string, fileName = "invoice.pdf"): Parsed
   };
 
   const warnings = [...(parsed.warnings ?? [])];
+  if (invoice.supplier === "Anthropic") {
+    invoice.customer_vat = extractCustomerVat(text);
+    if (!invoice.customer_vat) warnings.push("Partita IVA cliente assente o incerta: verifica l'intestazione del PDF prima di procedere.");
+  }
   if (invoice.total_amount !== null && invoice.net_amount !== null && invoice.tax_amount === null) {
     invoice.tax_amount = Math.round((invoice.total_amount - invoice.net_amount) * 100) / 100;
   }

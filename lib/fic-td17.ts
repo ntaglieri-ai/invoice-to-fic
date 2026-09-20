@@ -1,4 +1,5 @@
 import "server-only";
+import { requireCustomerVat } from "@/lib/customer-vat";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { ficFetch } from "@/lib/fatture-in-cloud";
 import { findExistingExpense, listAll, requireCompany } from "@/lib/fic-expenses";
@@ -68,6 +69,7 @@ export async function findExistingTd17(token: string, companyId: number, invoice
 async function context(token: string, companyId: number, invoice: InvoiceFields, options: Td17Options) {
   validateTd17(invoice, options);
   const company = await requireCompany(token, companyId);
+  requireCustomerVat(invoice, company.vat_number);
   const supplier = await td17Supplier(token, companyId, invoice, options.supplierId);
   const existingExpense = await findExistingExpense(token, companyId, invoice, supplier);
   if (!existingExpense) throw new Error("Registra prima la spesa in FIC. Il TD17 non crea una seconda spesa.");

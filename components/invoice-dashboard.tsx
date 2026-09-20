@@ -19,6 +19,7 @@ import { ExpenseDialog } from "@/components/expense-dialog";
 import { Td17Dialog } from "@/components/td17-dialog";
 import { GoogleInvoicesPanel } from "@/components/google-invoices-panel";
 import { currencyTotals } from "@/lib/invoice-totals";
+import { customerVatIssue } from "@/lib/customer-vat";
 import { canPrepareTd17, canWriteExpenses, ficConnectionNotice } from "@/lib/fic-permissions";
 
 const SUPPLIERS: SupportedSupplier[] = ["OpenAI", "Anthropic", "Vercel", "Hetzner", "Supabase", "Sconosciuto"];
@@ -33,6 +34,7 @@ type UiInvoice = ParsedInvoice & {
 type UploadState = "idle" | "dragging" | "uploading" | "error";
 
 type FicCompany = {
+  vat_number?: string | null;
   id: number | null;
   name: string | null;
   type: string | null;
@@ -69,7 +71,13 @@ export function InvoiceDashboard() {
   const canWrite = Boolean(ficStatus?.connected && canWriteExpenses(ficStatus.scope));
   const canTd17 = Boolean(ficStatus?.connected && canPrepareTd17(ficStatus.scope));
 
-  const enrichedInvoices = useMemo(() => markDuplicates(invoices), [invoices]);
+  const companyVat = flattenCompanies(ficStatus?.companies ?? []).find((company) => String(company.id) === companyId)?.vat_number;
+  const enrichedInvoices = useMemo(() => markDuplicates(invoices.map((item) => {
+    const issue = customerVatIssue(item.invoice, companyVat);
+    const warnings = item.warnings.filter((warning) => !warning.startsWith("Partita IVA cliente"));
+    return { ...item, status: issue ? "needs_review" as InvoiceStatus : item.status,
+      warnings: issue ? [issue, ...warnings] : warnings };
+  })), [invoices, companyVat]);
   const groups = useMemo(() => groupInvoices(enrichedInvoices), [enrichedInvoices]);
   const globalTotal = useMemo(
     () => currencyTotals(enrichedInvoices),
@@ -163,6 +171,8 @@ export function InvoiceDashboard() {
     const candidate = enrichedInvoices.find((item) => item.id === id);
     if (!candidate || candidate.status === "duplicate" || candidate.ficId) return;
     const errors = invoiceErrors(candidate.invoice);
+    const customerIssue = customerVatIssue(candidate.invoice, companyVat);
+    if (customerIssue) errors.push(customerIssue);
     if (errors.length) { setError(errors.join(" ")); return; }
     setError("");
     setInvoices((current) =>
@@ -171,7 +181,7 @@ export function InvoiceDashboard() {
   }
 
   function approveAll() {
-    const eligible = new Set(enrichedInvoices.filter((item) => item.status !== "duplicate" && !item.ficId && invoiceErrors(item.invoice).length === 0).map((item) => item.id));
+    const eligible = new Set(enrichedInvoices.filter((item) => item.status !== "duplicate" && !item.ficId && !customerVatIssue(item.invoice, companyVat) && invoiceErrors(item.invoice).length === 0).map((item) => item.id));
     setInvoices((current) =>
       current.map((item) => (eligible.has(item.id) ? { ...item, status: "approved" as InvoiceStatus } : item)),
     );
@@ -571,7 +581,7 @@ function InvoiceRow({
         <td className="px-4 py-3">
           <StatusBadge status={invoice.status} />
           {draft && !invoice.ficId && <p className="mt-2 text-xs text-amber-700">{draft.status === "needs_configuration" ? "Bozza: dati fiscali da confermare" : "Bozza pronta"}</p>}
-          {invoice.warnings.length ? <p className="mt-1 text-xs text-slate-500">{invoice.warnings[0]}</p> : null}
+          {invoice.warnings.length ? <p className="mt-1 text-xs text-slate-500">{invoice.warnings[0].startsWith("Partita IVA") ? "Intestazione da verificare" : invoice.warnings[0]}</p> : null}
         </td>
         <td className="px-4 py-3">
           <button
@@ -611,6 +621,10 @@ function InvoiceRow({
                 onChange={(event) => onChange(invoice.id, "supplier_vat", event.target.value.toUpperCase())}
               />
             </label>
+            {invoice.invoice.supplier === "Anthropic" && <label className="flex items-center gap-2">
+              <span>Partita IVA cliente</span>
+              <input aria-label="Partita IVA cliente" title="Riporta solo la partita IVA presente nell'intestazione del PDF" className="h-8 w-44 rounded-md border border-line px-2 uppercase" disabled={locked} maxLength={20} value={invoice.invoice.customer_vat ?? ""} placeholder="Non rilevata" onChange={(event) => onChange(invoice.id, "customer_vat", event.target.value.toUpperCase())} />
+            </label>}
             <span>Confidenza {Math.round(invoice.confidence * 100)}%</span>
             {invoice.warnings.length ? <span>{invoice.warnings.join(" | ")}</span> : null}
           </div>

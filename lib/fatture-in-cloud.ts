@@ -32,6 +32,7 @@ export type FattureInCloudOAuthSession = {
 };
 
 export type FattureInCloudCompany = {
+  vat_number?: string | null;
   id: number | null;
   name: string | null;
   type: "company" | "accountant" | string | null;
