@@ -54,9 +54,37 @@ export function googleCookieOptions(request: Request) {
   return { httpOnly: true, secure: new URL(request.url).protocol === "https:", sameSite: "lax" as const, path: "/", maxAge: 60 * 60 * 24 * 30 };
 }
 
+export class GoogleApiError extends Error {
+  constructor(message: string, public stopBatch: boolean) { super(message); }
+}
+
 export async function googleFetch(session: GoogleSession, path: string, init: RequestInit = {}) {
   if (!/^\/(gmail\/v1\/|drive\/v3\/|upload\/drive\/v3\/)/.test(path)) throw new Error("Endpoint Google non valido.");
-  const response = await fetch(`https://www.googleapis.com${path}`, { ...init, cache: "no-store", signal: AbortSignal.timeout(25000), headers: { ...init.headers, Authorization: `Bearer ${session.access}` } });
-  if (!response.ok) throw new Error(`Google API (${response.status}). Verifica permessi e connessione prima di riprovare.`);
-  return response;
+  const service = path.startsWith("/gmail/") ? "Gmail" : "Drive";
+  const method = (init.method ?? "GET").toUpperCase();
+  for (let attempt = 0; ; attempt++) {
+    const response = await fetch(`https://www.googleapis.com${path}`, { ...init, cache: "no-store", signal: AbortSignal.timeout(25000), headers: { ...init.headers, Authorization: `Bearer ${session.access}` } });
+    if (response.ok) return response;
+    const body = await response.json().catch(() => ({}));
+    const reasons: string[] = Array.isArray(body.error?.errors) ? body.error.errors.map((e: { reason?: string }) => e.reason ?? "") : [];
+    const rateLimited = response.status === 429 || reasons.some((r) => ["rateLimitExceeded", "userRateLimitExceeded"].includes(r));
+    const temporary = rateLimited || response.status >= 500;
+    // Retry reads only. An uncertain file creation must be checked on Drive before another write.
+    if (method === "GET" && temporary && attempt < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 1000 * 2 ** attempt + Math.floor(Math.random() * 250)));
+      continue;
+    }
+    let detail = "Richiesta rifiutata. Verifica la connessione e riprova.";
+    let code = "unknown";
+    if (reasons.includes("storageQuotaExceeded")) { code = "storageQuotaExceeded"; detail = "Spazio Google Drive esaurito. Libera spazio prima di riprovare."; }
+    else if (rateLimited) { code = "rateLimitExceeded"; detail = "Limite temporaneo di richieste Google raggiunto. Attendi qualche minuto e riprova."; }
+    else if (reasons.includes("dailyLimitExceeded")) { code = "dailyLimitExceeded"; detail = "Quota giornaliera Google esaurita. Verifica le quote del progetto Google Cloud."; }
+    else if (reasons.includes("accessNotConfigured")) { code = "accessNotConfigured"; detail = `Abilita l'API ${service} nel progetto Google Cloud.`; }
+    else if (response.status === 401 || reasons.includes("authError")) { code = "authError"; detail = "Autorizzazione Google scaduta. Ricollega Google."; }
+    else if (reasons.some((r) => ["insufficientPermissions", "forbidden", "insufficientFilePermissions"].includes(r)) || response.status === 403) { code = "permissionDenied"; detail = `Accesso ${service} negato. Ricollega Google autorizzando Gmail e Drive; verifica anche i permessi del file.`; }
+    else if (response.status === 404) { code = "notFound"; detail = "File o mail non piu disponibile. Ripeti la ricerca."; }
+    else if (temporary) { code = "unavailable"; detail = "Servizio Google temporaneamente non disponibile. Ripeti la ricerca prima di riprovare l'importazione."; }
+    console.warn("[google-api] request failed", { service, method, status: response.status, code });
+    throw new GoogleApiError(`${service} (${response.status}): ${detail}`, response.status !== 404);
+  }
 }

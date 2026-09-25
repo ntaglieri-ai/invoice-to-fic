@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 vi.mock("@/lib/google-session", () => ({ googleFetch: vi.fn() }));
 vi.mock("@/lib/invoice-link-download", () => ({ MAX_PDF_BYTES: 10 * 1024 * 1024, downloadOpenaiInvoice: vi.fn() }));
 vi.mock("@/lib/invoice-parser", () => ({ parseInvoicePdf: vi.fn() }));
@@ -43,6 +44,37 @@ it("scans only the label and retains pagination without Drive writes", async () 
   expect(result.items).toHaveLength(1); expect(result.nextPageToken).toBe("next");
   const list = vi.mocked(googleFetch).mock.calls.find((c) => c[1].includes("/messages?"))!;
   expect(list[1]).toContain("labelIds=saas"); expect(uploaded).toBeUndefined();
+});
+it("finds previously archived invoices during a fresh scan without downloading PDFs", async () => {
+  stored = { id: "saved", name: "invoice.pdf", appProperties: { ficSource: createHash("sha256").update("abc:1").digest("hex"), ficDate: "2026-09-12" } };
+  const result = await scanGoogleInvoices(session, "2026-09");
+  expect(result.items[0].archives).toEqual({ "1": { driveId: "saved", invoiceDate: "2026-09-12" } });
+  expect(parseInvoicePdf).not.toHaveBeenCalled();
+  const calls = vi.mocked(googleFetch).mock.calls;
+  expect(calls.every(([, , init]) => !init?.method || init.method === "GET")).toBe(true);
+  const path = calls.find(([, path]) => path.startsWith("/drive/v3/files?"))![1];
+  expect(new URLSearchParams(path.split("?")[1]).get("q")).toContain("trashed = false");
+});
+it("reports unknown archive status without hiding Gmail results when Drive fails", async () => {
+  const original = vi.mocked(googleFetch).getMockImplementation()!;
+  vi.mocked(googleFetch).mockImplementation((s, path, init) => {
+    if (path.startsWith("/drive/")) throw new Error("Drive (403): accesso negato");
+    return original(s, path, init);
+  });
+  const result = await scanGoogleInvoices(session, "2026-09");
+  expect(result.items).toHaveLength(1);
+  expect(result.items[0].archives).toBeUndefined();
+  expect(result.archiveWarning).toContain("Stato Drive non verificato");
+});
+it("reads all Drive pages before reporting archive state", async () => {
+  const original = vi.mocked(googleFetch).getMockImplementation()!;
+  vi.mocked(googleFetch).mockImplementation((s, path, init) => {
+    if (path.startsWith("/drive/")) return Promise.resolve(Response.json(path.includes("pageToken=next")
+      ? { files: [{ id: "saved", appProperties: { ficSource: createHash("sha256").update("abc:1").digest("hex") } }] }
+      : { files: [], nextPageToken: "next" }));
+    return original(s, path, init);
+  });
+  expect((await scanGoogleInvoices(session, "2026-09")).items[0].archives?.["1"].driveId).toBe("saved");
 });
 it("filters Gmail before pagination and keeps month and label restrictions", async () => {
   const result = await scanGoogleInvoices(session, "2026-09", "cursor", "Hetzner");

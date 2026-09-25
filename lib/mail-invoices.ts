@@ -3,7 +3,7 @@ import type { SupportedSupplier } from "@/lib/types";
 
 export type MailPart = { partId?: string; filename?: string; mimeType?: string; body?: { attachmentId?: string; data?: string; size?: number }; parts?: MailPart[]; headers?: { name: string; value: string }[] };
 export type MailMessage = { id: string; labelIds?: string[]; internalDate?: string; payload: MailPart };
-export type MailCandidate = { id: string; subject: string; supplier: SupportedSupplier; date: string; invoices: { partId: string; name: string }[]; receipts: number; linkAvailable: boolean; warning?: string };
+export type MailCandidate = { id: string; subject: string; supplier: SupportedSupplier; date: string; invoices: { partId: string; name: string }[]; receipts: number; linkAvailable: boolean; warning?: string; archives?: Record<string, { driveId: string; invoiceDate?: string }> };
 
 const SENDERS: Record<string, SupportedSupplier> = {
   "noreply@tm.openai.com": "OpenAI", "invoice+statements@mail.anthropic.com": "Anthropic",
@@ -46,7 +46,9 @@ export function classifyMail(message: MailMessage): MailCandidate {
   const invoices = parts.filter((p) => !/receipt|ricevuta/i.test(p.filename!) && /invoice|fattura|hetzner/i.test(p.filename!)).map((p) => ({ partId: p.partId ?? "", name: p.filename! }));
   const date = new Date(Number(message.internalDate));
   const linkAvailable = supplier === "OpenAI" && Boolean(openaiInvoiceLink(message));
-  return { id: message.id, subject: mailHeader(message, "subject"), supplier, date: Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : "", invoices: supplier === "Sconosciuto" ? [] : invoices, receipts: parts.filter((p) => /receipt|ricevuta/i.test(p.filename!)).length, linkAvailable,
+  const dateParts = Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat("en", { timeZone: "Europe/Rome", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date) : [];
+  const receivedDate = dateParts.length ? ["year", "month", "day"].map((type) => dateParts.find((part) => part.type === type)?.value).join("-") : "";
+  return { id: message.id, subject: mailHeader(message, "subject"), supplier, date: receivedDate, invoices: supplier === "Sconosciuto" ? [] : invoices, receipts: parts.filter((p) => /receipt|ricevuta/i.test(p.filename!)).length, linkAvailable,
     warning: supplier === "Sconosciuto" ? "Mittente non riconosciuto: verifica manuale." : !invoices.length && !linkAvailable ? "Nessuna fattura recuperabile automaticamente." : undefined };
 }
 

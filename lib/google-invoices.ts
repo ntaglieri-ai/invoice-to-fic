@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { googleFetch, type GoogleSession } from "@/lib/google-session";
-import { classifyMail, flattenParts, inRomeMonth, monthQuery, openaiInvoiceLink, supplierQuery, type MailMessage } from "@/lib/mail-invoices";
+import { classifyMail, flattenParts, inRomeMonth, monthQuery, openaiInvoiceLink, supplierQuery, type MailMessage, type MailCandidate } from "@/lib/mail-invoices";
 import { parseInvoicePdf } from "@/lib/invoice-parser";
 import type { ParsedInvoice } from "@/lib/types";
 
@@ -30,7 +30,45 @@ export async function scanGoogleInvoices(session: GoogleSession, month: string, 
     const candidate = classifyMail(message);
     if (message.labelIds?.includes(id) && inRomeMonth(message, month) && (!supplier || candidate.supplier === supplier)) items.push(candidate);
   }
-  return { items, nextPageToken: page.nextPageToken ?? null };
+  let archiveWarning: string | undefined;
+  try { await attachArchiveStatus(session, items); }
+  catch (error) {
+    const detail = error instanceof Error && !/https?:|token|Bearer|<html/i.test(error.message) ? error.message : "Riprova la ricerca.";
+    archiveWarning = `Stato Drive non verificato. ${detail}`;
+  }
+  return { items, nextPageToken: page.nextPageToken ?? null, ...(archiveWarning ? { archiveWarning } : {}) };
+}
+
+async function attachArchiveStatus(session: GoogleSession, items: MailCandidate[]) {
+  const sources = new Map<string, { item: MailCandidate; partId: string }>();
+  for (const item of items) {
+    for (const partId of item.invoices.length ? item.invoices.map((file) => file.partId) : item.linkAvailable ? ["openai-link"] : []) {
+      sources.set(hash(`${item.id}:${partId}`), { item, partId });
+    }
+  }
+  const matches: { item: MailCandidate; partId: string; file: DriveFile }[] = [];
+  const keys = [...sources.keys()];
+  for (let offset = 0; offset < keys.length; offset += 20) {
+    const clauses = keys.slice(offset, offset + 20).map((key) => `appProperties has { key='ficSource' and value='${key}' }`);
+    let pageToken = "";
+    for (let page = 0; page < 20; page++) {
+      const params = new URLSearchParams({ q: `trashed = false and mimeType = 'application/pdf' and (${clauses.join(" or ")})`, fields: "files(id,name,appProperties),nextPageToken,incompleteSearch", pageSize: "100", ...(pageToken ? { pageToken } : {}) });
+      const data = await json<{ files: DriveFile[]; nextPageToken?: string; incompleteSearch?: boolean }>(session, `/drive/v3/files?${params}`);
+      if (!Array.isArray(data.files) || data.incompleteSearch) throw new Error("Ricerca archivio incompleta.");
+      for (const file of data.files) {
+        const source = sources.get(file.appProperties?.ficSource ?? "");
+        if (source) matches.push({ ...source, file });
+      }
+      pageToken = data.nextPageToken ?? "";
+      if (!pageToken) break;
+      if (page === 19) throw new Error("Ricerca archivio incompleta.");
+    }
+  }
+  // Publish results only after every page is checked; failures must not look like an empty archive.
+  for (const item of items) item.archives = {};
+  for (const { item, partId, file } of matches) {
+    item.archives![partId] = { driveId: file.id, invoiceDate: file.appProperties?.ficDate };
+  }
 }
 
 async function findFile(session: GoogleSession, key: string, value: string) {
@@ -99,7 +137,7 @@ async function archive(session: GoogleSession, buffer: Buffer, fileName: string,
   } else parent = await folder(session, "Da verificare", parent);
   parent = await folder(session, expectedSupplier, parent);
   const safeName = fileName.replace(/[\/\\\x00-\x1f]/g, "_").slice(0, 160);
-  const metadata = { name: safeName, mimeType: "application/pdf", parents: [parent], appProperties: { ficSource: sourceKey, ficContent: contentKey, ...(businessKey ? { ficInvoice: businessKey } : {}) } };
+  const metadata = { name: safeName, mimeType: "application/pdf", parents: [parent], appProperties: { ficSource: sourceKey, ficContent: contentKey, ...(date ? { ficDate: date } : {}), ...(businessKey ? { ficInvoice: businessKey } : {}) } };
   const boundary = `fic_${randomUUID()}`;
   const body = Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: application/pdf\r\n\r\n`), buffer, Buffer.from(`\r\n--${boundary}--\r\n`)]);
   const uploaded = await json<DriveFile>(session, "/upload/drive/v3/files?uploadType=multipart&fields=id,name", { method: "POST", headers: { "Content-Type": `multipart/related; boundary=${boundary}` }, body });

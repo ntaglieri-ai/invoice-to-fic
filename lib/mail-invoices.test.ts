@@ -47,6 +47,7 @@ describe("Gmail invoice candidates", () => {
     expect(() => monthQuery("2026-13")).toThrow();
     expect(() => monthQuery("2026-09 OR label:Inbox")).toThrow();
     const m = mail(); m.internalDate = String(Date.parse("2026-08-31T22:30:00Z"));
+    expect(classifyMail(m).date).toBe("2026-09-01");
     expect(inRomeMonth(m, "2026-09")).toBe(true);
     expect(inRomeMonth(m, "2026-08")).toBe(false);
   });

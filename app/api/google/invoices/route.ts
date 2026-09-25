@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { APP_AUTH_COOKIE, verifyAppSessionCookieValue } from "@/lib/simple-auth";
-import { freshGoogle, GOOGLE_COOKIE, GOOGLE_STATE, googleConfig, googleCookieOptions, openGoogle, sealGoogle, type GoogleSession } from "@/lib/google-session";
+import { freshGoogle, GOOGLE_COOKIE, GOOGLE_STATE, googleConfig, googleCookieOptions, openGoogle, sealGoogle, GoogleApiError, type GoogleSession } from "@/lib/google-session";
 import { importGoogleInvoice, scanGoogleInvoices } from "@/lib/google-invoices";
 
 export const runtime = "nodejs";
@@ -42,6 +42,6 @@ export async function POST(request: Request) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Importazione non riuscita.";
     // Only expose controlled application messages, never browser/HTTP error URLs.
-    return reply({ error: /https?:|token|Bearer|<html/i.test(message) ? "Importazione non riuscita. Riprova o ricollega Google." : message }, 400);
+    return reply({ error: /https?:|token|Bearer|<html/i.test(message) ? "Importazione non riuscita. Riprova o ricollega Google." : message, stopBatch: error instanceof GoogleApiError ? error.stopBatch : (error instanceof Error && "stopBatch" in error && error.stopBatch === true) || /Ricollega Google|Autorizza sia Gmail/i.test(message) }, 400);
   }
 }

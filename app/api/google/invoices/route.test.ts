@@ -1,11 +1,11 @@
 import { beforeEach, expect, it, vi } from "vitest";
 vi.mock("next/headers", () => ({ cookies: vi.fn() }));
 vi.mock("@/lib/simple-auth", () => ({ APP_AUTH_COOKIE: "auth", verifyAppSessionCookieValue: vi.fn() }));
-vi.mock("@/lib/google-session", () => ({ GOOGLE_COOKIE: "google", GOOGLE_STATE: "state", freshGoogle: vi.fn(), openGoogle: vi.fn(), sealGoogle: () => "sealed", googleConfig: () => ({ configured: true }), googleCookieOptions: () => ({ httpOnly: true }) }));
+vi.mock("@/lib/google-session", async (importOriginal) => ({ ...await importOriginal<typeof import("@/lib/google-session")>(), GOOGLE_COOKIE: "google", GOOGLE_STATE: "state", freshGoogle: vi.fn(), openGoogle: vi.fn(), sealGoogle: () => "sealed", googleConfig: () => ({ configured: true }), googleCookieOptions: () => ({ httpOnly: true }) }));
 vi.mock("@/lib/google-invoices", () => ({ importGoogleInvoice: vi.fn(), scanGoogleInvoices: vi.fn() }));
 import { cookies } from "next/headers";
 import { verifyAppSessionCookieValue } from "@/lib/simple-auth";
-import { freshGoogle, openGoogle } from "@/lib/google-session";
+import { freshGoogle, openGoogle, GoogleApiError } from "@/lib/google-session";
 import { importGoogleInvoice, scanGoogleInvoices } from "@/lib/google-invoices";
 import { GET, POST } from "./route";
 const session = { access: "a", refresh: "r", expires: 0, scope: "" };
@@ -37,6 +37,11 @@ it("refreshes cookie on error and does not leak URLs", async () => {
   const response = await POST(request({ action: "import", messageId: "abc", partId: "1" }));
   expect(response.headers.get("set-cookie")).toContain("google=sealed");
   expect(JSON.stringify(await response.json())).not.toContain("private-token");
+});
+it("tells the client to stop the batch on a Google quota error", async () => {
+  vi.mocked(importGoogleInvoice).mockRejectedValue(new GoogleApiError("Drive (403): Spazio esaurito.", true));
+  const response = await POST(request({ action: "import", messageId: "abc", partId: "1" }));
+  expect(await response.json()).toMatchObject({ stopBatch: true });
 });
 it("scans without archiving anything", async () => {
   vi.mocked(scanGoogleInvoices).mockResolvedValue({ items: [], nextPageToken: null });
