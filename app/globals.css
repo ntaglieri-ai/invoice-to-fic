@@ -65,6 +65,10 @@ summary { display: flex; gap: 9px; align-items: center; cursor: pointer; font-si
 .fic-reference small { display: block; font-size: 10px; font-weight: 600; }
 .fic-reference strong { display: block; font-size: 13px; font-variant-numeric: tabular-nums; }
 .fic-reference:hover { background: #dcf3e7; }
+.fic-reference[data-delivery=not_sent] { background: #fff5cf; border-color: #e7cc72; color: #72530b; }
+.fic-reference[data-delivery=not_sent]:hover { background: #ffedac; }
+.fic-reference[data-delivery=sent] { background: #e0f8f2; border-color: #8ad4c5; color: #075e51; }
+.fic-reference[data-delivery=sent]:hover { background: #caf0e7; }
 @media (max-width: 760px) {
   .invoice-review tbody > tr:has(td:not([colspan])) { grid-template-columns: 1fr 1fr; gap: 10px; }
   .invoice-review td:nth-child(7), .invoice-review td:nth-child(8) { grid-column: 1 / -1; justify-content: flex-start; }

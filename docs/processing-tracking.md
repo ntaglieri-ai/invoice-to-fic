@@ -20,3 +20,12 @@ restano attivi anche dopo un reset.
 
 Spesa creata e TD17 creato sono stati separati. TD17 creato non significa inviato
 allo SDI. L'invio rimane una conferma manuale dentro FIC.
+
+Il TD17 usa due indicatori: Creato / non inviato (giallo) e Inviato (verde acqua).
+Verifica stati FIC legge anche ei_status: sent, processing, accepted,
+not_delivered e no_response indicano che la trasmissione e avvenuta. Gli stati
+di attesa, errore, scarto o non conosciuti non sono promossi a verde. Il valore
+FIC originale rimane nel tooltip per distinguere eventuali anomalie; verde
+indica invio, non necessariamente accettazione o consegna riuscita.
+Se un TD17 restituisce 404, vengono rimossi ID e stato TD17, senza eliminare la
+fattura di revisione, il PDF Drive o il riferimento alla spesa.

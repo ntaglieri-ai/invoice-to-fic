@@ -32,6 +32,7 @@ export async function POST(request: Request) {
       if (typeof record.key !== "string" || record.key.length > 500) throw new Error("Riferimento non valido.");
       let recoveredExpenseId: number | undefined;
       let recoveredTd17Id: number | undefined;
+      let td17EiStatus: string | undefined;
       if (!record.expenseId || !record.td17Id) {
         const invoice = record.invoice;
         if (!invoice || typeof invoice.invoice_number !== "string" || invoice.invoice_number.length > 200 || typeof invoice.invoice_date !== "string" || typeof invoice.supplier_vat !== "string") throw new Error("Fattura non valida.");
@@ -41,20 +42,23 @@ export async function POST(request: Request) {
           const supplier = { ...matches[0], vat_number: matches[0].vat_number! };
           const [expense, td17] = await Promise.all([!record.expenseId ? findExistingExpense(session.accessToken, body.companyId, invoice, supplier) : undefined, !record.td17Id ? findExistingTd17(session.accessToken, body.companyId, invoice, supplier) : undefined]);
           recoveredExpenseId = expense?.id; recoveredTd17Id = td17?.id;
+          td17EiStatus = td17?.ei_status;
         }
       }
       async function exists(id: number | undefined, type: string) {
         if (id === undefined) return undefined;
         if (!Number.isSafeInteger(id) || id <= 0) throw new Error("ID non valido.");
-        const response = await fetch(`${FIC_API_BASE_URL}/c/${body.companyId}/${type}/${id}?fields=id`, { headers: { Authorization: `Bearer ${session.accessToken}` }, cache: "no-store", signal: AbortSignal.timeout(20000) });
+        const fields = type === "issued_documents" ? "id,ei_status" : "id";
+        const response = await fetch(`${FIC_API_BASE_URL}/c/${body.companyId}/${type}/${id}?fields=${fields}`, { headers: { Authorization: `Bearer ${session.accessToken}` }, cache: "no-store", signal: AbortSignal.timeout(20000) });
         if (response.status === 404) return false;
         if (!response.ok) throw new Error(`Verifica FIC non riuscita (${response.status}). Stati conservati.`);
         const data = await response.json();
         if (data?.data?.id !== id) throw new Error("Risposta FIC incompleta. Stati conservati.");
+        if (type === "issued_documents") td17EiStatus = typeof data.data.ei_status === "string" ? data.data.ei_status : "unknown";
         return true;
       }
       const [expenseExists, td17Exists] = await Promise.all([exists(record.expenseId, "received_documents"), exists(record.td17Id, "issued_documents")]);
-      return { key: record.key, expenseExists, td17Exists, expenseId: recoveredExpenseId, td17Id: recoveredTd17Id };
+      return { key: record.key, expenseExists, td17Exists, expenseId: recoveredExpenseId, td17Id: recoveredTd17Id, td17EiStatus };
     }));
     return reply({ records });
   } catch (e) {

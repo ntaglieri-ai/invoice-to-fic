@@ -38,7 +38,15 @@ it("distinguishes missing documents from permission failures without writing to 
 });
 it("recovers existing expense and TD17 IDs using supplier VAT and invoice identity", async () => {
   vi.mocked(listExpenseSuppliers).mockResolvedValue([{ id: 8, name: "OpenAI", vat_number: "IE4143435AH" }]);
-  vi.mocked(findExistingExpense).mockResolvedValue({ id: 123 }); vi.mocked(findExistingTd17).mockResolvedValue({ id: 456 });
+  vi.mocked(findExistingExpense).mockResolvedValue({ id: 123 }); vi.mocked(findExistingTd17).mockResolvedValue({ id: 456, ei_status: "sent" });
   const response = await POST(request([{ key: "test", invoice: { invoice_number: "TEST-0095", invoice_date: "2026-09-15", supplier_vat: "IE4143435AH" } }]));
-  expect(await response.json()).toEqual({ records: [{ key: "test", expenseId: 123, td17Id: 456 }] });
+  expect(await response.json()).toEqual({ records: [{ key: "test", expenseId: 123, td17Id: 456, td17EiStatus: "sent" }] });
+});
+it("reads the current SDI status of a known TD17, without sending it", async () => {
+  const fetch = vi.fn().mockImplementation(async (url: string) => Response.json({ data: { id: url.includes("issued_documents") ? 456 : 123, ei_status: "sent" } }));
+  vi.stubGlobal("fetch", fetch);
+  const response = await POST(request([{ key: "test", expenseId: 123, td17Id: 456 }]));
+  expect(await response.json()).toEqual({ records: [{ key: "test", expenseExists: true, td17Exists: true, td17EiStatus: "sent" }] });
+  expect(fetch.mock.calls.some(([url]) => url.includes("issued_documents/456?fields=id,ei_status"))).toBe(true);
+  expect(fetch.mock.calls.every(([url, init]) => !url.includes("/send") && !init.method)).toBe(true);
 });

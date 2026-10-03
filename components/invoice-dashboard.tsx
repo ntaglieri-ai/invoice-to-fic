@@ -15,6 +15,7 @@ import {
   ExternalLink,
   ChevronLeft,
   ChevronRight,
+  Clock3,
   UploadCloud,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -25,7 +26,7 @@ import { Td17Dialog } from "@/components/td17-dialog";
 import { GoogleInvoicesPanel } from "@/components/google-invoices-panel";
 import { currencyTotals } from "@/lib/invoice-totals";
 import { customerVatIssue } from "@/lib/customer-vat";
-import { processingKey, readProcessingLedger, PROCESSING_STORAGE_KEY, type ProcessingLedger, type ProcessingRecord } from "@/lib/processing-state";
+import { processingKey, readProcessingLedger, PROCESSING_STORAGE_KEY, td17DeliveryState, type Td17DeliveryState, type ProcessingLedger, type ProcessingRecord } from "@/lib/processing-state";
 import { canPrepareTd17, canWriteExpenses, ficConnectionNotice } from "@/lib/fic-permissions";
 
 const SUPPLIERS: SupportedSupplier[] = ["OpenAI", "Anthropic", "Vercel", "Hetzner", "Supabase", "Sconosciuto"];
@@ -34,7 +35,7 @@ type UiInvoice = ParsedInvoice & {
   id: string;
   ficId?: number;
   expenseDraft?: PreparedExpense;
-  td17?: { companyId: number; id: number };
+  td17?: { companyId: number; id: number; state?: Td17DeliveryState; eiStatus?: string };
 };
 
 type UploadState = "idle" | "dragging" | "uploading" | "error";
@@ -88,7 +89,7 @@ export function InvoiceDashboard() {
     const record = ledger[processingKey(companyId, item.invoice)];
     const issue = customerVatIssue(item.invoice, companyVat);
     const warnings = item.warnings.filter((warning) => !warning.startsWith("Partita IVA cliente"));
-    return { ...item, ficId: record?.expenseId, td17: record?.td17Id ? { companyId: Number(companyId), id: record.td17Id } : undefined, status: issue ? "needs_review" as InvoiceStatus : record?.expenseId || record?.td17Id ? "approved" as InvoiceStatus : item.status,
+    return { ...item, ficId: record?.expenseId, td17: record?.td17Id ? { companyId: Number(companyId), id: record.td17Id, state: record.td17State, eiStatus: record.td17EiStatus } : undefined, status: issue ? "needs_review" as InvoiceStatus : record?.expenseId || record?.td17Id ? "approved" as InvoiceStatus : item.status,
       warnings: issue ? [issue, ...warnings] : warnings };
   })), [invoices, companyVat, ledger, companyId]);
   const pageCount = Math.max(1, Math.ceil(enrichedInvoices.length / reviewPageSize));
@@ -119,13 +120,17 @@ export function InvoiceDashboard() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Verifica FIC non riuscita.");
       const next = { ...ledger }; let missing = 0;
-      for (const record of data.records as { key: string; expenseExists?: boolean; td17Exists?: boolean; expenseId?: number; td17Id?: number }[]) {
+      for (const record of data.records as { key: string; expenseExists?: boolean; td17Exists?: boolean; expenseId?: number; td17Id?: number; td17EiStatus?: string }[]) {
         if (!next[record.key] && !record.expenseId && !record.td17Id) continue;
         next[record.key] = { ...next[record.key], updatedAt: new Date().toISOString() };
         if (record.expenseId) next[record.key].expenseId = record.expenseId;
         if (record.td17Id) next[record.key].td17Id = record.td17Id;
+        if (record.td17EiStatus !== undefined) {
+          next[record.key].td17EiStatus = record.td17EiStatus;
+          next[record.key].td17State = td17DeliveryState(record.td17EiStatus);
+        }
         if (record.expenseExists === false) { delete next[record.key].expenseId; missing++; }
-        if (record.td17Exists === false) { delete next[record.key].td17Id; missing++; }
+        if (record.td17Exists === false) { delete next[record.key].td17Id; delete next[record.key].td17State; delete next[record.key].td17EiStatus; missing++; }
       }
       setLedger(next); localStorage.setItem(PROCESSING_STORAGE_KEY, JSON.stringify(next));
       setTrackingNotice(missing ? `${missing} documenti non piu presenti in FIC. Collegamenti rimossi, puoi ricrearli.` : "Documenti della pagina verificati in FIC.");
@@ -464,7 +469,7 @@ export function InvoiceDashboard() {
           invoice={td17Invoice.invoice}
           companyId={Number(companyId)}
           onClose={() => setTd17Id(null)}
-          onCreated={(result) => saveProcessing(td17Invoice.invoice, { td17Id: result.id })}
+          onCreated={(result) => saveProcessing(td17Invoice.invoice, { td17Id: result.id, td17State: td17DeliveryState(result.eiStatus), td17EiStatus: result.eiStatus })}
         />}
         {expenseInvoice && companyId && <ExpenseDialog
           key={`${expenseInvoice.id}-${companyId}`}
@@ -689,7 +694,7 @@ function InvoiceRow({
             Approva
           </button>}
           {invoice.ficId ? <FicReference label="Spesa" id={invoice.ficId} /> : <button type="button" disabled={!canCreate || invoice.status !== "approved" || invoice.invoice.currency !== "EUR"} onClick={() => onCreate(invoice.id)} className="fic-command"><Cloud size={16} />{draft ? "Rivedi bozza" : "Prepara spesa"}</button>}
-          {invoice.td17?.companyId === activeCompanyId ? <FicReference label="TD17" id={invoice.td17.id} /> : <button type="button" disabled={!canTd17 || invoice.status !== "approved" || invoice.invoice.currency !== "EUR" || invoice.invoice.tax_amount !== 0} onClick={() => onTd17(invoice.id)} className="fic-command"><FileText size={16} />Prepara TD17</button>}
+          {invoice.td17?.companyId === activeCompanyId ? <FicReference label="TD17" id={invoice.td17.id} deliveryState={invoice.td17.state ?? "not_sent"} eiStatus={invoice.td17.eiStatus} /> : <button type="button" disabled={!canTd17 || invoice.status !== "approved" || invoice.invoice.currency !== "EUR" || invoice.invoice.tax_amount !== 0} onClick={() => onTd17(invoice.id)} className="fic-command"><FileText size={16} />Prepara TD17</button>}
           {(invoice.ficId || invoice.td17) && <button type="button" title="Reset collegamenti locali; non cancella documenti FIC" aria-label={`Reset FIC ${invoice.invoice.invoice_number}`} onClick={onReset} className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-line text-slate-500"><RotateCcw size={15} /></button>}
         </td>
       </tr>
@@ -740,12 +745,13 @@ function InvoiceRow({
   );
 }
 
-function FicReference({ label, id }: { label: string; id: number }) {
+function FicReference({ label, id, deliveryState, eiStatus }: { label: string; id: number; deliveryState?: Td17DeliveryState; eiStatus?: string }) {
   const [copied, setCopied] = useState(false);
-  return <button type="button" className="fic-reference" title="Copia ID documento FIC" onClick={async () => {
+  const deliveryLabel = deliveryState === "sent" ? "Inviato" : "Creato · non inviato";
+  return <button type="button" className="fic-reference" data-delivery={deliveryState} aria-label={`${label} FIC #${id}${deliveryState ? ` · ${deliveryLabel}` : ""}`} title={`Copia ID documento FIC${eiStatus ? ` · Stato FIC: ${eiStatus}` : ""}`} onClick={async () => {
     try { await navigator.clipboard.writeText(String(id)); setCopied(true); }
     catch { setCopied(false); }
-  }}><CheckCircle2 size={17} /><span><small>{label} FIC</small><strong>#{id}</strong></span>{copied ? <Check size={14} /> : <Copy size={14} />}</button>;
+  }}>{deliveryState === "not_sent" ? <Clock3 size={17} /> : <CheckCircle2 size={17} />}<span><small>{label} FIC</small><strong>#{id}</strong>{deliveryState && <small className="mt-0.5">{deliveryLabel}</small>}</span>{copied ? <Check size={14} /> : <Copy size={14} />}</button>;
 }
 
 function Editable({
