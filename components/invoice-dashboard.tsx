@@ -28,6 +28,7 @@ import { currencyTotals } from "@/lib/invoice-totals";
 import { customerVatIssue } from "@/lib/customer-vat";
 import { processingKey, readProcessingLedger, PROCESSING_STORAGE_KEY, td17DeliveryState, type Td17DeliveryState, type ProcessingLedger, type ProcessingRecord } from "@/lib/processing-state";
 import { canPrepareTd17, canWriteExpenses, ficConnectionNotice } from "@/lib/fic-permissions";
+import { HISTORY_KEY, invoiceMonth, readInvoiceHistory, serializeInvoiceHistory } from "@/lib/invoice-history";
 
 const SUPPLIERS: SupportedSupplier[] = ["OpenAI", "Anthropic", "Vercel", "Hetzner", "Supabase", "Sconosciuto"];
 
@@ -65,6 +66,8 @@ type FicStatus = {
 export function InvoiceDashboard() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [invoices, setInvoices] = useState<UiInvoice[]>([]);
+  const [historyReady, setHistoryReady] = useState(false);
+  const [historyMonth, setHistoryMonth] = useState("all");
   const [uploadState, setUploadState] = useState<UploadState>("idle");
   const [error, setError] = useState("");
   const [ficStatus, setFicStatus] = useState<FicStatus | null>(null);
@@ -92,9 +95,26 @@ export function InvoiceDashboard() {
     return { ...item, ficId: record?.expenseId, td17: record?.td17Id ? { companyId: Number(companyId), id: record.td17Id, state: record.td17State, eiStatus: record.td17EiStatus } : undefined, status: issue ? "needs_review" as InvoiceStatus : record?.expenseId || record?.td17Id ? "approved" as InvoiceStatus : item.status,
       warnings: issue ? [issue, ...warnings] : warnings };
   })), [invoices, companyVat, ledger, companyId]);
-  const pageCount = Math.max(1, Math.ceil(enrichedInvoices.length / reviewPageSize));
+  const months = [...new Set(invoices.map(invoiceMonth))].sort().reverse();
+  const monthlyInvoices = enrichedInvoices.filter((item) => historyMonth === "all" || invoiceMonth(item) === historyMonth);
+  const pageCount = Math.max(1, Math.ceil(monthlyInvoices.length / reviewPageSize));
   const currentPage = Math.min(reviewPage, pageCount - 1);
-  const visibleInvoices = enrichedInvoices.slice(currentPage * reviewPageSize, currentPage * reviewPageSize + reviewPageSize);
+  const visibleInvoices = monthlyInvoices.slice(currentPage * reviewPageSize, currentPage * reviewPageSize + reviewPageSize);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      try { setInvoices(readInvoiceHistory(localStorage.getItem(HISTORY_KEY))); }
+      catch { setError("Cronologia non disponibile: il browser impedisce il salvataggio."); }
+      setHistoryReady(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!historyReady) return;
+    try { localStorage.setItem(HISTORY_KEY, serializeInvoiceHistory(invoices)); }
+    catch { window.setTimeout(() => setError("Cronologia non salvata: spazio del browser esaurito o salvataggio bloccato. Non chiudere la pagina."), 0); }
+  }, [invoices, historyReady]);
 
   function saveProcessing(invoice: InvoiceFields, change: Partial<ProcessingRecord>, reset = false) {
     const key = processingKey(companyId, invoice);
@@ -107,7 +127,7 @@ export function InvoiceDashboard() {
   }
   function resetProcessingList() {
     const next = { ...ledger };
-    for (const item of enrichedInvoices) delete next[processingKey(companyId, item.invoice)];
+    for (const item of monthlyInvoices) delete next[processingKey(companyId, item.invoice)];
     setLedger(next);
     try { localStorage.setItem(PROCESSING_STORAGE_KEY, JSON.stringify(next)); }
     catch { setError("Reset non salvato nel browser."); }
@@ -137,12 +157,9 @@ export function InvoiceDashboard() {
     } catch (e) { setError(e instanceof Error ? e.message : "Verifica non riuscita."); }
     finally { setTrackingBusy(false); }
   }
-  const groups = useMemo(() => groupInvoices(enrichedInvoices), [enrichedInvoices]);
-  const globalTotal = useMemo(
-    () => currencyTotals(enrichedInvoices),
-    [enrichedInvoices],
-  );
-  const approvedCount = enrichedInvoices.filter((item) => item.status === "approved").length;
+  const groups = groupInvoices(monthlyInvoices);
+  const globalTotal = currencyTotals(monthlyInvoices);
+  const approvedCount = monthlyInvoices.filter((item) => item.status === "approved").length;
 
   useEffect(() => {
     refreshFicStatus();
@@ -216,7 +233,8 @@ export function InvoiceDashboard() {
   }
 
   function clearInvoices() {
-    setInvoices([]);
+    if (!window.confirm("Rimuovere le fatture di questa vista dalla cronologia? I PDF su Drive e i documenti FIC non saranno cancellati.")) return;
+    setInvoices((current) => current.filter((item) => historyMonth !== "all" && invoiceMonth(item) !== historyMonth));
     setExpenseId(null);
     setTd17Id(null);
   }
@@ -255,7 +273,7 @@ export function InvoiceDashboard() {
   }
 
   function approveAll() {
-    const eligible = new Set(enrichedInvoices.filter((item) => item.status !== "duplicate" && !item.ficId && !customerVatIssue(item.invoice, companyVat) && invoiceErrors(item.invoice).length === 0).map((item) => item.id));
+    const eligible = new Set(monthlyInvoices.filter((item) => item.status !== "duplicate" && !item.ficId && !customerVatIssue(item.invoice, companyVat) && invoiceErrors(item.invoice).length === 0).map((item) => item.id));
     setInvoices((current) =>
       current.map((item) => (eligible.has(item.id) ? { ...item, status: "approved" as InvoiceStatus } : item)),
     );
@@ -270,11 +288,11 @@ export function InvoiceDashboard() {
           </div>
           <div className="flex items-center gap-3">
             <div className="grid min-w-0 flex-1 grid-cols-3 gap-2 text-sm lg:grid-cols-5">
-              <Metric label="Fatture" value={String(enrichedInvoices.length)} />
-              <Metric label="Approvate" value={`${approvedCount}/${enrichedInvoices.length}`} />
+              <Metric label="Fatture" value={String(monthlyInvoices.length)} />
+              <Metric label="Approvate" value={`${approvedCount}/${monthlyInvoices.length}`} />
               <Metric label="Totali" value={globalTotal} />
-              <Metric label="Spese FIC" value={String(enrichedInvoices.filter((item) => item.ficId).length)} />
-              <Metric label="TD17 FIC" value={String(enrichedInvoices.filter((item) => item.td17).length)} />
+              <Metric label="Spese FIC" value={String(monthlyInvoices.filter((item) => item.ficId).length)} />
+              <Metric label="TD17 FIC" value={String(monthlyInvoices.filter((item) => item.td17).length)} />
             </div>
             <form action="/api/auth/logout" method="post">
               <button
@@ -373,7 +391,7 @@ export function InvoiceDashboard() {
                         <p className="font-medium">{group.supplier}</p>
                         <p className="text-xs text-slate-500">{group.count} fatture</p>
                       </div>
-                      <p className="font-semibold">{currencyTotals(enrichedInvoices.filter((item) => item.invoice.supplier === group.supplier))}</p>
+                      <p className="font-semibold">{currencyTotals(monthlyInvoices.filter((item) => item.invoice.supplier === group.supplier))}</p>
                     </div>
                   ))
                 ) : (
@@ -387,25 +405,29 @@ export function InvoiceDashboard() {
           <div className="min-w-0 rounded-lg border border-line bg-white shadow-panel">
             <div className="flex flex-col gap-3 border-b border-line p-4 md:flex-row md:items-center md:justify-between">
               <div>
-                <h2 className="text-lg font-semibold">Revisione fatture</h2>
+                <h2 className="text-lg font-semibold">Cronologia fatture</h2>
                 <p className="text-sm text-slate-500">Modifica i campi incerti, controlla duplicati e approva.</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+              <select aria-label="Mese cronologia" value={historyMonth} onChange={(event) => { setHistoryMonth(event.target.value); setReviewPage(0); }} className="h-10 rounded-md border border-line bg-white px-3 text-sm">
+                <option value="all">Tutti i mesi</option>
+                {months.map((month) => <option key={month} value={month}>{month === "undated" ? "Senza data" : new Intl.DateTimeFormat("it-IT", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${month}-01T12:00:00Z`))}</option>)}
+              </select>
               <button type="button" onClick={verifyProcessing} disabled={trackingBusy || !ficStatus?.connected || !visibleInvoices.length} className="inline-flex h-10 items-center gap-2 rounded-md border border-line px-3 text-sm disabled:opacity-40"><CheckCircle2 size={16} />{trackingBusy ? "Verifica..." : "Verifica stati FIC"}</button>
               <button type="button" title="Azzera solo i collegamenti delle fatture caricate; non cancella in FIC" onClick={resetProcessingList} disabled={!enrichedInvoices.some((item) => item.ficId || item.td17)} className="inline-flex h-10 items-center gap-2 rounded-md border border-line px-3 text-sm disabled:opacity-40"><RotateCcw size={16} /> Reset stati FIC</button>
               <button
                 className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-line px-3 text-sm font-medium text-slate-600 hover:bg-red-50 hover:text-red-700 disabled:opacity-40"
-                disabled={!enrichedInvoices.length || uploadState === "uploading"}
+                disabled={!monthlyInvoices.length || uploadState === "uploading"}
                 onClick={clearInvoices}
-                title="Rimuovi tutte le fatture dalla revisione, senza cancellare da Drive o FIC"
+                title="Rimuovi le fatture della vista dalla cronologia, senza cancellare da Drive o FIC"
                 type="button"
               >
                 <Trash2 size={17} />
-                Svuota elenco
+                Rimuovi dalla cronologia
               </button>
               <button
                 className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-mint px-4 text-sm font-semibold text-white disabled:bg-slate-300"
-                disabled={!enrichedInvoices.length}
+                disabled={!monthlyInvoices.length}
                 onClick={approveAll}
                 type="button"
               >
@@ -431,7 +453,7 @@ export function InvoiceDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {enrichedInvoices.length ? (
+                  {monthlyInvoices.length ? (
                     visibleInvoices.map((item, index) => (
                       <InvoiceRow
                         key={item.id}
@@ -459,7 +481,7 @@ export function InvoiceDashboard() {
                   )}
                 </tbody>
               </table>
-              <nav aria-label="Paginazione revisione" className="flex flex-wrap items-center justify-between gap-2 border-t border-line p-3 text-sm"><span>{enrichedInvoices.length} fatture · Pagina {currentPage + 1} di {pageCount}</span><div className="flex items-center gap-2"><select aria-label="Fatture per pagina" value={reviewPageSize} onChange={(e) => { setReviewPageSize(Number(e.target.value)); setReviewPage(0); }} className="h-9 rounded-md border border-line bg-white px-2 text-xs">{[1, 2, 3].map((size) => <option key={size} value={size}>{size} per pagina</option>)}</select><button type="button" aria-label="Fatture precedenti" disabled={currentPage === 0} onClick={() => setReviewPage(currentPage - 1)} className="rounded-md border border-line p-2 disabled:opacity-40"><ChevronLeft size={16} /></button><button type="button" aria-label="Fatture successive" disabled={currentPage + 1 >= pageCount} onClick={() => setReviewPage(currentPage + 1)} className="rounded-md border border-line p-2 disabled:opacity-40"><ChevronRight size={16} /></button></div></nav>
+              <nav aria-label="Paginazione revisione" className="flex flex-wrap items-center justify-between gap-2 border-t border-line p-3 text-sm"><span>{monthlyInvoices.length} fatture · Pagina {currentPage + 1} di {pageCount}</span><div className="flex items-center gap-2"><select aria-label="Fatture per pagina" value={reviewPageSize} onChange={(e) => { setReviewPageSize(Number(e.target.value)); setReviewPage(0); }} className="h-9 rounded-md border border-line bg-white px-2 text-xs">{[1, 2, 3].map((size) => <option key={size} value={size}>{size} per pagina</option>)}</select><button type="button" aria-label="Fatture precedenti" disabled={currentPage === 0} onClick={() => setReviewPage(currentPage - 1)} className="rounded-md border border-line p-2 disabled:opacity-40"><ChevronLeft size={16} /></button><button type="button" aria-label="Fatture successive" disabled={currentPage + 1 >= pageCount} onClick={() => setReviewPage(currentPage + 1)} className="rounded-md border border-line p-2 disabled:opacity-40"><ChevronRight size={16} /></button></div></nav>
             </div>
           </div>
         </section>
