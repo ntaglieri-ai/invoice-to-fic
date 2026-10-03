@@ -11,6 +11,10 @@ import {
   Pencil,
   RotateCcw,
   Trash2,
+  Copy,
+  ExternalLink,
+  ChevronLeft,
+  ChevronRight,
   UploadCloud,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -21,6 +25,7 @@ import { Td17Dialog } from "@/components/td17-dialog";
 import { GoogleInvoicesPanel } from "@/components/google-invoices-panel";
 import { currencyTotals } from "@/lib/invoice-totals";
 import { customerVatIssue } from "@/lib/customer-vat";
+import { processingKey, readProcessingLedger, PROCESSING_STORAGE_KEY, type ProcessingLedger, type ProcessingRecord } from "@/lib/processing-state";
 import { canPrepareTd17, canWriteExpenses, ficConnectionNotice } from "@/lib/fic-permissions";
 
 const SUPPLIERS: SupportedSupplier[] = ["OpenAI", "Anthropic", "Vercel", "Hetzner", "Supabase", "Sconosciuto"];
@@ -67,6 +72,12 @@ export function InvoiceDashboard() {
   const [companyId, setCompanyId] = useState("");
   const [expenseId, setExpenseId] = useState<string | null>(null);
   const [td17Id, setTd17Id] = useState<string | null>(null);
+  const [workspace, setWorkspace] = useState<"processing" | "archive">("processing");
+  const [ledger, setLedger] = useState<ProcessingLedger>({});
+  const [reviewPage, setReviewPage] = useState(0);
+  const [reviewPageSize, setReviewPageSize] = useState(2);
+  const [trackingBusy, setTrackingBusy] = useState(false);
+  const [trackingNotice, setTrackingNotice] = useState("");
   const td17Invoice = invoices.find((item) => item.id === td17Id);
   const expenseInvoice = invoices.find((item) => item.id === expenseId);
   const canWrite = Boolean(ficStatus?.connected && canWriteExpenses(ficStatus.scope));
@@ -74,11 +85,53 @@ export function InvoiceDashboard() {
 
   const companyVat = flattenCompanies(ficStatus?.companies ?? []).find((company) => String(company.id) === companyId)?.vat_number;
   const enrichedInvoices = useMemo(() => markDuplicates(invoices.map((item) => {
+    const record = ledger[processingKey(companyId, item.invoice)];
     const issue = customerVatIssue(item.invoice, companyVat);
     const warnings = item.warnings.filter((warning) => !warning.startsWith("Partita IVA cliente"));
-    return { ...item, status: issue ? "needs_review" as InvoiceStatus : item.status,
+    return { ...item, ficId: record?.expenseId, td17: record?.td17Id ? { companyId: Number(companyId), id: record.td17Id } : undefined, status: issue ? "needs_review" as InvoiceStatus : record?.expenseId || record?.td17Id ? "approved" as InvoiceStatus : item.status,
       warnings: issue ? [issue, ...warnings] : warnings };
-  })), [invoices, companyVat]);
+  })), [invoices, companyVat, ledger, companyId]);
+  const pageCount = Math.max(1, Math.ceil(enrichedInvoices.length / reviewPageSize));
+  const currentPage = Math.min(reviewPage, pageCount - 1);
+  const visibleInvoices = enrichedInvoices.slice(currentPage * reviewPageSize, currentPage * reviewPageSize + reviewPageSize);
+
+  function saveProcessing(invoice: InvoiceFields, change: Partial<ProcessingRecord>, reset = false) {
+    const key = processingKey(companyId, invoice);
+    const next = { ...ledger };
+    if (reset) delete next[key];
+    else next[key] = { ...next[key], ...change, updatedAt: new Date().toISOString() };
+    setLedger(next);
+    try { localStorage.setItem(PROCESSING_STORAGE_KEY, JSON.stringify(next)); }
+    catch { setError("Stato FIC non salvato nel browser. Mantieni aperta questa pagina."); }
+  }
+  function resetProcessingList() {
+    const next = { ...ledger };
+    for (const item of enrichedInvoices) delete next[processingKey(companyId, item.invoice)];
+    setLedger(next);
+    try { localStorage.setItem(PROCESSING_STORAGE_KEY, JSON.stringify(next)); }
+    catch { setError("Reset non salvato nel browser."); }
+  }
+  async function verifyProcessing() {
+    setTrackingBusy(true); setTrackingNotice(""); setError("");
+    try {
+      const records = visibleInvoices.map((item) => ({ key: processingKey(companyId, item.invoice), expenseId: item.ficId, td17Id: item.td17?.id, invoice: item.invoice }));
+      const response = await fetch("/api/fatture-in-cloud/processing", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ companyId: Number(companyId), records }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Verifica FIC non riuscita.");
+      const next = { ...ledger }; let missing = 0;
+      for (const record of data.records as { key: string; expenseExists?: boolean; td17Exists?: boolean; expenseId?: number; td17Id?: number }[]) {
+        if (!next[record.key] && !record.expenseId && !record.td17Id) continue;
+        next[record.key] = { ...next[record.key], updatedAt: new Date().toISOString() };
+        if (record.expenseId) next[record.key].expenseId = record.expenseId;
+        if (record.td17Id) next[record.key].td17Id = record.td17Id;
+        if (record.expenseExists === false) { delete next[record.key].expenseId; missing++; }
+        if (record.td17Exists === false) { delete next[record.key].td17Id; missing++; }
+      }
+      setLedger(next); localStorage.setItem(PROCESSING_STORAGE_KEY, JSON.stringify(next));
+      setTrackingNotice(missing ? `${missing} documenti non piu presenti in FIC. Collegamenti rimossi, puoi ricrearli.` : "Documenti della pagina verificati in FIC.");
+    } catch (e) { setError(e instanceof Error ? e.message : "Verifica non riuscita."); }
+    finally { setTrackingBusy(false); }
+  }
   const groups = useMemo(() => groupInvoices(enrichedInvoices), [enrichedInvoices]);
   const globalTotal = useMemo(
     () => currencyTotals(enrichedInvoices),
@@ -95,6 +148,7 @@ export function InvoiceDashboard() {
     const response = await fetch("/api/fatture-in-cloud/status", { cache: "no-store" });
     if (!response.ok) throw new Error("Impossibile verificare la connessione FIC.");
     const payload = (await response.json()) as FicStatus;
+    setLedger(readProcessingLedger(localStorage.getItem(PROCESSING_STORAGE_KEY)));
     setFicStatus(payload);
     setFicNotice(ficConnectionNotice(new URLSearchParams(window.location.search).get("fic"), payload.connected, payload.scope));
     const companies = flattenCompanies(payload.companies).filter((item) => item.id && item.type !== "accountant");
@@ -163,6 +217,8 @@ export function InvoiceDashboard() {
   }
 
   function updateInvoice(id: string, field: keyof InvoiceFields, rawValue: string) {
+    const candidate = enrichedInvoices.find((item) => item.id === id);
+    if (candidate?.ficId || candidate?.td17) return;
     setInvoices((current) =>
       current.map((item) => {
         if (item.id !== id || item.ficId || item.td17) return item;
@@ -202,37 +258,39 @@ export function InvoiceDashboard() {
 
   return (
     <main className="min-h-screen px-6 py-8">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
-        <header className="flex flex-col gap-4 border-b border-line pb-6 lg:flex-row lg:items-end lg:justify-between">
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
+        <header className="flex flex-col gap-3 border-b border-line pb-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <div className="mb-3 inline-flex items-center gap-2 rounded-md border border-line bg-white px-3 py-1.5 text-sm text-slate-600">
-              <FileText size={16} />
-              Revisione e spese
-            </div>
-            <h1 className="text-3xl font-semibold tracking-normal text-ink">Invoice to FIC</h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-              Preparazione temporanea delle fatture PDF SaaS estere: estrazione, revisione manuale e approvazione prima
-              dell&apos;integrazione Fatture in Cloud.
-            </p>
+            <h1 className="text-2xl font-semibold tracking-normal text-ink">Invoice to FIC</h1>
           </div>
-          <div className="flex flex-col gap-3 lg:items-end">
-            <div className="grid grid-cols-3 gap-3 text-sm">
+          <div className="flex items-center gap-3">
+            <div className="grid min-w-0 flex-1 grid-cols-3 gap-2 text-sm lg:grid-cols-5">
               <Metric label="Fatture" value={String(enrichedInvoices.length)} />
               <Metric label="Approvate" value={`${approvedCount}/${enrichedInvoices.length}`} />
               <Metric label="Totali" value={globalTotal} />
+              <Metric label="Spese FIC" value={String(enrichedInvoices.filter((item) => item.ficId).length)} />
+              <Metric label="TD17 FIC" value={String(enrichedInvoices.filter((item) => item.td17).length)} />
             </div>
             <form action="/api/auth/logout" method="post">
               <button
                 className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-medium hover:bg-slate-50"
                 type="submit"
+                title="Esci"
+                aria-label="Esci"
               >
                 <LogOut size={16} />
-                Esci
               </button>
             </form>
           </div>
         </header>
+        <nav aria-label="Aree di lavoro" className="workspace-tabs">
+          <button type="button" aria-pressed={workspace === "processing"} onClick={() => setWorkspace("processing")}><Cloud size={18} /> Spese e TD17 <span>{enrichedInvoices.length}</span></button>
+          <button type="button" aria-pressed={workspace === "archive"} onClick={() => setWorkspace("archive")}><UploadCloud size={18} /> Raccolta e archivio</button>
+        </nav>
+        <div hidden={workspace !== "archive"}>
         <GoogleInvoicesPanel onInvoice={(result) => setInvoices((current) => current.some((item) => item.id === `drive-${result.driveId}`) ? current : [...current, { ...result.invoice, id: `drive-${result.driveId}` }])} />
+        </div>
+        <div hidden={workspace !== "processing"} className="processing-workspace">
 
         {ficNotice && <p role={ficNotice.error ? "alert" : "status"} className={`rounded-md border p-4 text-sm ${ficNotice.error ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-800"}`}>{ficNotice.message}</p>}
         <FattureInCloudPanel
@@ -245,9 +303,9 @@ export function InvoiceDashboard() {
           canWrite={canWrite}
         />
 
-        <section className="grid gap-5 lg:grid-cols-[minmax(340px,420px),1fr]">
+        <section className="grid gap-4">
           <div className="flex flex-col gap-4">
-            <div
+            <details className="manual-upload"><summary><UploadCloud size={18} /> Carica PDF dal Mac</summary><div
               className={`flex min-h-[260px] cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed bg-white p-8 text-center shadow-panel transition ${
                 uploadState === "dragging" ? "border-mint bg-emerald-50" : "border-line hover:border-slate-400"
               }`}
@@ -292,6 +350,7 @@ export function InvoiceDashboard() {
               </button>
             </div>
 
+            </details>
             {error ? (
               <div className="flex items-start gap-3 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
                 <AlertTriangle className="mt-0.5 shrink-0" size={18} />
@@ -299,7 +358,7 @@ export function InvoiceDashboard() {
               </div>
             ) : null}
 
-            <div className="rounded-lg border border-line bg-white p-4 shadow-panel">
+            <details className="supplier-totals"><summary>Totali per fornitore · {globalTotal}</summary><div className="bg-white p-4">
               <h2 className="text-sm font-semibold uppercase tracking-normal text-slate-500">Totali per fornitore</h2>
               <div className="mt-4 space-y-3">
                 {groups.length ? (
@@ -317,6 +376,7 @@ export function InvoiceDashboard() {
                 )}
               </div>
             </div>
+            </details>
           </div>
 
           <div className="min-w-0 rounded-lg border border-line bg-white shadow-panel">
@@ -326,6 +386,8 @@ export function InvoiceDashboard() {
                 <p className="text-sm text-slate-500">Modifica i campi incerti, controlla duplicati e approva.</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+              <button type="button" onClick={verifyProcessing} disabled={trackingBusy || !ficStatus?.connected || !visibleInvoices.length} className="inline-flex h-10 items-center gap-2 rounded-md border border-line px-3 text-sm disabled:opacity-40"><CheckCircle2 size={16} />{trackingBusy ? "Verifica..." : "Verifica stati FIC"}</button>
+              <button type="button" title="Azzera solo i collegamenti delle fatture caricate; non cancella in FIC" onClick={resetProcessingList} disabled={!enrichedInvoices.some((item) => item.ficId || item.td17)} className="inline-flex h-10 items-center gap-2 rounded-md border border-line px-3 text-sm disabled:opacity-40"><RotateCcw size={16} /> Reset stati FIC</button>
               <button
                 className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-line px-3 text-sm font-medium text-slate-600 hover:bg-red-50 hover:text-red-700 disabled:opacity-40"
                 disabled={!enrichedInvoices.length || uploadState === "uploading"}
@@ -348,8 +410,9 @@ export function InvoiceDashboard() {
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[1120px] border-collapse text-left text-sm">
+            {trackingNotice && <p role="status" className="border-b border-line bg-emerald-50 px-4 py-2 text-sm text-emerald-800">{trackingNotice}</p>}
+            <div>
+              <table className="invoice-review w-full border-collapse text-left text-sm">
                 <thead className="bg-slate-50 text-xs uppercase tracking-normal text-slate-500">
                   <tr>
                     <th className="px-4 py-3">Fornitore</th>
@@ -364,15 +427,16 @@ export function InvoiceDashboard() {
                 </thead>
                 <tbody>
                   {enrichedInvoices.length ? (
-                    enrichedInvoices.map((item, index) => (
+                    visibleInvoices.map((item, index) => (
                       <InvoiceRow
                         key={item.id}
                         invoice={item}
                         isGroupStart={
-                          index === 0 || enrichedInvoices[index - 1].invoice.supplier !== item.invoice.supplier
+                          index === 0 || visibleInvoices[index - 1].invoice.supplier !== item.invoice.supplier
                         }
                         onApprove={approveInvoice}
                         onRemove={removeInvoice}
+                        onReset={() => saveProcessing(item.invoice, {}, true)}
                         onChange={updateInvoice}
                         canCreate={canWrite && Boolean(companyId)}
                         canTd17={canTd17}
@@ -390,15 +454,17 @@ export function InvoiceDashboard() {
                   )}
                 </tbody>
               </table>
+              <nav aria-label="Paginazione revisione" className="flex flex-wrap items-center justify-between gap-2 border-t border-line p-3 text-sm"><span>{enrichedInvoices.length} fatture · Pagina {currentPage + 1} di {pageCount}</span><div className="flex items-center gap-2"><select aria-label="Fatture per pagina" value={reviewPageSize} onChange={(e) => { setReviewPageSize(Number(e.target.value)); setReviewPage(0); }} className="h-9 rounded-md border border-line bg-white px-2 text-xs">{[1, 2, 3].map((size) => <option key={size} value={size}>{size} per pagina</option>)}</select><button type="button" aria-label="Fatture precedenti" disabled={currentPage === 0} onClick={() => setReviewPage(currentPage - 1)} className="rounded-md border border-line p-2 disabled:opacity-40"><ChevronLeft size={16} /></button><button type="button" aria-label="Fatture successive" disabled={currentPage + 1 >= pageCount} onClick={() => setReviewPage(currentPage + 1)} className="rounded-md border border-line p-2 disabled:opacity-40"><ChevronRight size={16} /></button></div></nav>
             </div>
           </div>
         </section>
+        </div>
         {td17Invoice && companyId && <Td17Dialog
           key={`${td17Invoice.id}-${companyId}`}
           invoice={td17Invoice.invoice}
           companyId={Number(companyId)}
           onClose={() => setTd17Id(null)}
-          onCreated={(result) => setInvoices((current) => current.map((item) => item.id === td17Invoice.id ? { ...item, td17: { companyId: Number(companyId), id: result.id } } : item))}
+          onCreated={(result) => saveProcessing(td17Invoice.invoice, { td17Id: result.id })}
         />}
         {expenseInvoice && companyId && <ExpenseDialog
           key={`${expenseInvoice.id}-${companyId}`}
@@ -407,7 +473,7 @@ export function InvoiceDashboard() {
           initialDraft={expenseInvoice.expenseDraft?.companyId === Number(companyId) ? expenseInvoice.expenseDraft : undefined}
           onClose={() => setExpenseId(null)}
           onPrepared={(expenseDraft) => setInvoices((current) => current.map((item) => item.id === expenseInvoice.id ? { ...item, expenseDraft } : item))}
-          onCreated={(ficId) => setInvoices((current) => current.map((item) => item.id === expenseInvoice.id ? { ...item, ficId } : item))}
+          onCreated={(ficId) => saveProcessing(expenseInvoice.invoice, { expenseId: ficId })}
         />}
       </div>
     </main>
@@ -449,11 +515,8 @@ function FattureInCloudPanel({
               <FicConnectionBadge status={status} />
             </div>
             <p className="mt-1 text-sm text-slate-600">
-              {canPrepareTd17(status?.scope) ? "TD17 non inviati. Conferma finale dell'invio in FIC." : canWrite ? "Registrazione spese EUR disponibile. Autorizza TD17 per preparare le autofatture." : "Ricollega FIC per autorizzare la registrazione delle spese."}
+              {canPrepareTd17(status?.scope) ? "Invio SDI: conferma finale in FIC." : canWrite ? "Registrazione spese EUR disponibile. Autorizza TD17 per preparare le autofatture." : "Ricollega FIC per autorizzare la registrazione delle spese."}
             </p>
-            {status?.config.configured ? (
-              <p className="mt-2 text-xs text-slate-500">Scope: {status.config.scopes.join(", ")}</p>
-            ) : null}
             {status?.config.configured === false ? (
               <p className="mt-2 text-xs text-red-600">Mancano: {status.config.missing.join(", ")}</p>
             ) : null}
@@ -472,6 +535,7 @@ function FattureInCloudPanel({
             </select>
           ) : null}
           <div className="flex gap-2">
+            <a href="https://secure.fattureincloud.it/" target="_blank" rel="noopener noreferrer" title="Apri Fatture in Cloud" aria-label="Apri Fatture in Cloud" className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-line text-blue-700"><ExternalLink size={17} /></a>
             {status?.connected && !canWrite && <a className="inline-flex h-10 items-center gap-2 rounded-md bg-ink px-3 text-sm text-white" href="/api/fatture-in-cloud/connect"><Link2 size={16} />Autorizza spese</a>}
             {status?.connected && canWrite && !canPrepareTd17(status.scope) && <a className="inline-flex h-10 items-center gap-2 rounded-md bg-ink px-3 text-sm text-white" href="/api/fatture-in-cloud/connect"><Link2 size={16} />Autorizza TD17</a>}
             <button
@@ -542,6 +606,7 @@ function InvoiceRow({
   isGroupStart,
   onApprove,
   onRemove,
+  onReset,
   onChange,
   canCreate,
   onCreate,
@@ -553,6 +618,7 @@ function InvoiceRow({
   isGroupStart: boolean;
   onApprove: (id: string) => void;
   onRemove: (id: string) => void;
+  onReset: () => void;
   onChange: (id: string, field: keyof InvoiceFields, rawValue: string) => void;
   canCreate: boolean;
   activeCompanyId: number;
@@ -612,7 +678,7 @@ function InvoiceRow({
           {invoice.warnings.length ? <p className="mt-1 text-xs text-slate-500">{invoice.warnings[0].startsWith("Partita IVA") ? "Intestazione da verificare" : invoice.warnings[0]}</p> : null}
         </td>
         <td className="px-4 py-3">
-          <button
+          {invoice.status !== "approved" && !locked && <button
             className="inline-flex h-9 items-center gap-2 rounded-md border border-line px-3 text-sm font-medium hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
             disabled={duplicate || locked}
             onClick={() => onApprove(invoice.id)}
@@ -621,9 +687,10 @@ function InvoiceRow({
           >
             <Check size={16} />
             Approva
-          </button>
-          {invoice.ficId ? <p className="mt-2 text-xs text-emerald-700">Registrata FIC #{invoice.ficId}</p> : <button type="button" disabled={!canCreate || invoice.status !== "approved" || invoice.invoice.currency !== "EUR"} onClick={() => onCreate(invoice.id)} className="mt-2 inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-md border border-line px-3 text-sm disabled:opacity-40"><Cloud size={16} />{draft ? "Rivedi bozza" : "Prepara spesa"}</button>}
-          {invoice.td17?.companyId === activeCompanyId ? <p className="mt-2 text-xs text-emerald-700">TD17 FIC #{invoice.td17.id}</p> : <button type="button" disabled={!canTd17 || invoice.status !== "approved" || invoice.invoice.currency !== "EUR" || invoice.invoice.tax_amount !== 0} onClick={() => onTd17(invoice.id)} className="mt-2 inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-md border border-line px-3 text-sm disabled:opacity-40"><FileText size={16} />Prepara TD17</button>}
+          </button>}
+          {invoice.ficId ? <FicReference label="Spesa" id={invoice.ficId} /> : <button type="button" disabled={!canCreate || invoice.status !== "approved" || invoice.invoice.currency !== "EUR"} onClick={() => onCreate(invoice.id)} className="fic-command"><Cloud size={16} />{draft ? "Rivedi bozza" : "Prepara spesa"}</button>}
+          {invoice.td17?.companyId === activeCompanyId ? <FicReference label="TD17" id={invoice.td17.id} /> : <button type="button" disabled={!canTd17 || invoice.status !== "approved" || invoice.invoice.currency !== "EUR" || invoice.invoice.tax_amount !== 0} onClick={() => onTd17(invoice.id)} className="fic-command"><FileText size={16} />Prepara TD17</button>}
+          {(invoice.ficId || invoice.td17) && <button type="button" title="Reset collegamenti locali; non cancella documenti FIC" aria-label={`Reset FIC ${invoice.invoice.invoice_number}`} onClick={onReset} className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-line text-slate-500"><RotateCcw size={15} /></button>}
         </td>
       </tr>
       <tr className={duplicate ? "bg-amber-50/70" : "border-b border-slate-100 bg-white"}>
@@ -671,6 +738,14 @@ function InvoiceRow({
       </tr>
     </>
   );
+}
+
+function FicReference({ label, id }: { label: string; id: number }) {
+  const [copied, setCopied] = useState(false);
+  return <button type="button" className="fic-reference" title="Copia ID documento FIC" onClick={async () => {
+    try { await navigator.clipboard.writeText(String(id)); setCopied(true); }
+    catch { setCopied(false); }
+  }}><CheckCircle2 size={17} /><span><small>{label} FIC</small><strong>#{id}</strong></span>{copied ? <Check size={14} /> : <Copy size={14} />}</button>;
 }
 
 function Editable({
@@ -727,7 +802,7 @@ function EditableDate({ value, onChange, disabled = false }: { value: string; on
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-28 rounded-lg border border-line bg-white p-3 shadow-panel">
+    <div className="min-w-0 rounded-lg border border-line bg-white p-2.5 shadow-panel">
       <p className="text-xs uppercase tracking-normal text-slate-500">{label}</p>
       <p className="mt-1 text-lg font-semibold">{value}</p>
     </div>

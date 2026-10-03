@@ -24,6 +24,7 @@ async function action(body: unknown) {
 
 export function GoogleInvoicesPanel({ onInvoice }: { onInvoice: (result: ArchivedInvoice) => void }) {
   const [status, setStatus] = useState<Status | null>(null);
+  const [source, setSource] = useState<"mail" | "drive">("drive");
   const [supplier, setSupplier] = useState("");
   const [month, setMonth] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; });
   const [pages, setPages] = useState<MailPage[]>([]);
@@ -115,6 +116,8 @@ export function GoogleInvoicesPanel({ onInvoice }: { onInvoice: (result: Archive
     </div>
     {error && <p role="alert" className="mt-3 text-sm text-red-700">{error}</p>}
     {status?.connected && <>
+      <nav aria-label="Sorgente fatture" className="workspace-tabs mt-4"><button type="button" aria-pressed={source === "mail"} onClick={() => setSource("mail")}><Mail size={16} /> Mail da archiviare</button><button type="button" aria-pressed={source === "drive"} onClick={() => setSource("drive")}><Download size={16} /> PDF su Drive</button></nav>
+      <div hidden={source !== "mail"}>
       <div className="mt-4 flex flex-wrap items-end gap-3">
         <label className="text-sm">Mese ricezione mail<input aria-label="Mese ricezione mail" type="month" value={month} disabled={Boolean(busy)} onChange={(e) => { setMonth(e.target.value); resetPages(); }} className="mt-1 block h-10 rounded-md border border-line bg-white px-3" /></label>
         <label className="text-sm">Fornitore<select aria-label="Fornitore mail" value={supplier} disabled={Boolean(busy)} onChange={(e) => { setSupplier(e.target.value); resetPages(); }} className="mt-1 block h-10 w-44 max-w-full rounded-md border border-line bg-white px-3">
@@ -122,7 +125,7 @@ export function GoogleInvoicesPanel({ onInvoice }: { onInvoice: (result: Archive
           {["OpenAI", "Anthropic", "Vercel", "Hetzner", "Supabase"].map((name) => <option key={name} value={name}>{name}</option>)}
         </select></label>
         <button disabled={Boolean(busy) || !month} onClick={() => scan()} className="flex h-10 items-center gap-2 rounded-md border border-line bg-white px-3 text-sm disabled:opacity-50"><Search size={16} /> Cerca mail</button>
-        <button disabled={Boolean(busy) || !items.some((i) => i.partId && !archivedId(i) && !manualDownloads.has(i.id))} onClick={() => importRows(items.filter((i) => i.partId && !archivedId(i) && !manualDownloads.has(i.id)))} className="flex h-10 items-center gap-2 rounded-md bg-ink px-3 text-sm text-white disabled:opacity-50"><Download size={16} /> Importa non scaricate</button>
+        <button disabled={Boolean(busy) || !items.some((i) => i.partId && !archivedId(i) && !manualDownloads.has(i.id))} onClick={() => importRows(items.filter((i) => i.partId && !archivedId(i) && !manualDownloads.has(i.id)))} className="flex h-10 items-center gap-2 rounded-md bg-ink px-3 text-sm text-white disabled:opacity-50"><Download size={16} /> Archivia e carica pagina</button>
         {busy && <span role="status" className="flex items-center gap-2 text-sm"><LoaderCircle className="animate-spin" size={16} /> {busy === "scan" ? "Ricerca mail" : "Operazione in corso"}</span>}
       </div>
       {scanned && !items.length && <p className="mt-4 text-sm text-slate-500">Nessuna mail trovata con i filtri selezionati.</p>}
@@ -146,11 +149,12 @@ export function GoogleInvoicesPanel({ onInvoice }: { onInvoice: (result: Archive
           <a href={`https://mail.google.com/mail/u/0/#all/${encodeURIComponent(item.id)}`} target="_blank" rel="noopener noreferrer" onClick={() => markDownloaded(item.id, true)} className="inline-flex items-center gap-1">Mail <ExternalLink size={14} /></a>
           <label className="inline-flex items-center gap-2 whitespace-nowrap"><input type="checkbox" aria-label={`Scaricata: ${item.subject}`} checked={Boolean(archivedId(item)) || manualDownloads.has(item.id)} disabled={Boolean(archivedId(item)) || Boolean(busy)} onChange={(event) => markDownloaded(item.id, event.target.checked)} className="h-4 w-4 accent-emerald-600" />Scaricata</label>
           {archivedId(item) && <a href={`https://drive.google.com/file/d/${encodeURIComponent(archivedId(item)!)}/view`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-emerald-700"><CheckCircle2 size={16} /> Archiviata su Drive <ExternalLink size={14} /></a>}
-          {!item.result && item.partId && <button disabled={Boolean(busy)} onClick={() => importRows([item])} className="rounded-md border border-line bg-white px-3 py-2 disabled:opacity-50">{item.error ? "Riprova" : archivedId(item) ? "Carica in revisione" : "Importa"}</button>}
+          {item.partId && <button disabled={Boolean(busy)} onClick={() => importRows([item])} className="rounded-md border border-line bg-white px-3 py-2 disabled:opacity-50">{item.error ? "Riprova" : archivedId(item) ? "Carica in revisione" : "Archivia e carica"}</button>}
         </li>)}
       </ul>
       </div>
-      <DriveInvoicesPanel onInvoice={onInvoice} />
+      </div>
+      <div hidden={source !== "drive"}><DriveInvoicesPanel onInvoice={onInvoice} /></div>
     </>}
   </section>;
 }

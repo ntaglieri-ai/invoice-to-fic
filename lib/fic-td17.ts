@@ -46,12 +46,12 @@ async function td17Supplier(token: string, companyId: number, invoice: InvoiceFi
     address_postal_code: "00000", address_province: "EE", address_extra: data.address_extra ?? "" };
 }
 
-function reference(companyId: number, invoice: InvoiceFields, supplier: Td17Supplier) {
+function reference(companyId: number, invoice: InvoiceFields, supplier: Pick<Td17Supplier, "id" | "vat_number">) {
   const identity = [companyId, normalizeIdentifier(supplier.vat_number), normalizeIdentifier(invoice.invoice_number), invoice.invoice_date];
   return `Invoice to FIC TD17 ${createHash("sha256").update(JSON.stringify(identity)).digest("hex")}`;
 }
 
-export async function findExistingTd17(token: string, companyId: number, invoice: InvoiceFields, supplier: Td17Supplier) {
+export async function findExistingTd17(token: string, companyId: number, invoice: InvoiceFields, supplier: Pick<Td17Supplier, "id" | "vat_number">) {
   const documents = await listAll<ExistingTd17>(token, `/c/${companyId}/issued_documents?type=self_supplier_invoice&fields=id,number,numeration,subject,entity,ei_raw,ei_data,ei_status`);
   const marker = reference(companyId, invoice, supplier);
   return documents.find((doc) => {
