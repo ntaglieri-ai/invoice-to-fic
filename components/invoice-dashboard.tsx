@@ -10,6 +10,7 @@ import {
   LogOut,
   Pencil,
   RotateCcw,
+  Trash2,
   UploadCloud,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -147,6 +148,18 @@ export function InvoiceDashboard() {
       })),
     ]);
     setUploadState("idle");
+  }
+
+  function removeInvoice(id: string) {
+    setInvoices((current) => current.filter((item) => item.id !== id));
+    setExpenseId((current) => current === id ? null : current);
+    setTd17Id((current) => current === id ? null : current);
+  }
+
+  function clearInvoices() {
+    setInvoices([]);
+    setExpenseId(null);
+    setTd17Id(null);
   }
 
   function updateInvoice(id: string, field: keyof InvoiceFields, rawValue: string) {
@@ -312,6 +325,17 @@ export function InvoiceDashboard() {
                 <h2 className="text-lg font-semibold">Revisione fatture</h2>
                 <p className="text-sm text-slate-500">Modifica i campi incerti, controlla duplicati e approva.</p>
               </div>
+              <div className="flex flex-wrap items-center gap-2">
+              <button
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-line px-3 text-sm font-medium text-slate-600 hover:bg-red-50 hover:text-red-700 disabled:opacity-40"
+                disabled={!enrichedInvoices.length || uploadState === "uploading"}
+                onClick={clearInvoices}
+                title="Rimuovi tutte le fatture dalla revisione, senza cancellare da Drive o FIC"
+                type="button"
+              >
+                <Trash2 size={17} />
+                Svuota elenco
+              </button>
               <button
                 className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-mint px-4 text-sm font-semibold text-white disabled:bg-slate-300"
                 disabled={!enrichedInvoices.length}
@@ -321,6 +345,7 @@ export function InvoiceDashboard() {
                 <CheckCircle2 size={17} />
                 Approva tutte
               </button>
+              </div>
             </div>
 
             <div className="overflow-x-auto">
@@ -347,6 +372,7 @@ export function InvoiceDashboard() {
                           index === 0 || enrichedInvoices[index - 1].invoice.supplier !== item.invoice.supplier
                         }
                         onApprove={approveInvoice}
+                        onRemove={removeInvoice}
                         onChange={updateInvoice}
                         canCreate={canWrite && Boolean(companyId)}
                         canTd17={canTd17}
@@ -515,6 +541,7 @@ function InvoiceRow({
   invoice,
   isGroupStart,
   onApprove,
+  onRemove,
   onChange,
   canCreate,
   onCreate,
@@ -525,6 +552,7 @@ function InvoiceRow({
   invoice: UiInvoice;
   isGroupStart: boolean;
   onApprove: (id: string) => void;
+  onRemove: (id: string) => void;
   onChange: (id: string, field: keyof InvoiceFields, rawValue: string) => void;
   canCreate: boolean;
   activeCompanyId: number;
@@ -601,7 +629,18 @@ function InvoiceRow({
       <tr className={duplicate ? "bg-amber-50/70" : "border-b border-slate-100 bg-white"}>
         <td className="px-4 pb-4 pt-0 text-xs text-slate-500" colSpan={8}>
           <div className="flex flex-wrap items-center gap-4">
-            <span className="font-medium text-slate-600">{invoice.file_name}</span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                aria-label={`Rimuovi fattura ${invoice.invoice.invoice_number || invoice.file_name}`}
+                title="Rimuovi dalla revisione (Drive e FIC restano invariati)"
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-line text-slate-500 hover:border-red-300 hover:bg-red-50 hover:text-red-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
+                onClick={() => onRemove(invoice.id)}
+              >
+                <Trash2 size={16} />
+              </button>
+              <span className="font-medium text-slate-600">{invoice.file_name}</span>
+            </div>
             <label className="flex items-center gap-2">
               <span>Valuta</span>
               <input
