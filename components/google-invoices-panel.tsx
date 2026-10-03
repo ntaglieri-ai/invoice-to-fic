@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { CheckCircle2, Download, ExternalLink, Link2, LoaderCircle, Mail, Search, Unplug } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { CheckCircle2, ChevronLeft, ChevronRight, Download, ExternalLink, Link2, LoaderCircle, Mail, Search, Unplug } from "lucide-react";
 import type { MailCandidate } from "@/lib/mail-invoices";
 import type { ArchivedInvoice } from "@/lib/google-invoices";
 
 type Status = { connected: boolean; config: { configured: boolean; missing: string[] } };
 type Item = MailCandidate & { partId: string; fileName: string; key: string; result?: ArchivedInvoice; error?: string };
+type MailPage = { items: Item[]; nextToken: string | null; archiveWarning: string };
+const DOWNLOAD_MARKS_KEY = "invoice-to-fic:manual-downloads:v1";
 class ImportError extends Error {
   constructor(message: string, public stopBatch: boolean) { super(message); }
 }
@@ -23,30 +25,68 @@ export function GoogleInvoicesPanel({ onInvoice }: { onInvoice: (result: Archive
   const [status, setStatus] = useState<Status | null>(null);
   const [supplier, setSupplier] = useState("");
   const [month, setMonth] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; });
-  const [items, setItems] = useState<Item[]>([]);
-  const [nextPage, setNextPage] = useState<string | null>(null);
+  const [pages, setPages] = useState<MailPage[]>([]);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [manualDownloads, setManualDownloads] = useState<Set<string>>(new Set());
+  const listRef = useRef<HTMLDivElement>(null);
+  const activePage = pages[pageIndex];
+  const items = activePage?.items ?? [];
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  const [scanned, setScanned] = useState(false);
-  const [archiveWarning, setArchiveWarning] = useState("");
+  const scanned = Boolean(activePage);
+  const archiveWarning = activePage?.archiveWarning ?? "";
   useEffect(() => {
-    fetch("/api/google/invoices", { cache: "no-store" }).then(async (r) => { if (!r.ok) throw new Error("Connessione Google non disponibile."); setStatus(await r.json()); }).catch((e) => setError(e.message));
-    if (new URLSearchParams(window.location.search).get("google") === "authorization-error") setError("Autorizzazione Google non completata. Ricollega e autorizza Gmail e Drive.");
+    fetch("/api/google/invoices", { cache: "no-store" }).then(async (r) => {
+      if (!r.ok) throw new Error("Connessione Google non disponibile.");
+      const connection: Status = await r.json();
+      try {
+        const stored: unknown = JSON.parse(localStorage.getItem(DOWNLOAD_MARKS_KEY) ?? "[]");
+        if (Array.isArray(stored)) setManualDownloads(new Set(stored.filter((id): id is string => typeof id === "string" && /^[a-zA-Z0-9_-]{1,100}$/.test(id))));
+      } catch { /* Keep the list usable when browser storage is unavailable. */ }
+      setStatus(connection);
+      if (new URLSearchParams(window.location.search).get("google") === "authorization-error") setError("Autorizzazione Google non completata. Ricollega e autorizza Gmail e Drive.");
+    }).catch((e) => setError(e.message));
   }, []);
 
-  async function scan(more = false) {
+  function resetPages() {
+    setPages([]); setPageIndex(0); setError("");
+  }
+
+  function markDownloaded(messageId: string, downloaded: boolean) {
+    const next = new Set(manualDownloads);
+    if (downloaded) next.add(messageId); else next.delete(messageId);
+    setManualDownloads(next);
+    try { localStorage.setItem(DOWNLOAD_MARKS_KEY, JSON.stringify([...next])); }
+    catch { setError("Il browser non permette di salvare i check: resteranno disponibili fino al ricaricamento."); }
+  }
+
+  async function scan(targetIndex = 0, pageToken = "") {
     setBusy("scan"); setError("");
     try {
-      const data = await action({ action: "scan", month, supplier, ...(more && nextPage ? { pageToken: nextPage } : {}) });
+      const data = await action({ action: "scan", month, supplier, ...(pageToken ? { pageToken } : {}) });
       const rows = (data.items as MailCandidate[]).flatMap((mail) => {
         const files = mail.invoices.length ? mail.invoices : [{ partId: mail.linkAvailable ? "openai-link" : "", name: mail.linkAvailable ? "Fattura OpenAI (link)" : "Da verificare" }];
         return files.map((file) => ({ ...mail, partId: file.partId, fileName: file.name, key: `${mail.id}:${file.partId}` }));
       });
-      setItems((previous) => more ? [...previous, ...rows.filter((r) => !previous.some((p) => p.key === r.key))] : rows);
-      setNextPage(data.nextPageToken); setScanned(true);
-      setArchiveWarning(data.archiveWarning ?? "");
+      const page = { items: rows, nextToken: data.nextPageToken ?? null, archiveWarning: data.archiveWarning ?? "" };
+      setPages((previous) => [...previous.slice(0, targetIndex), page]);
+      setPageIndex(targetIndex);
+      if (targetIndex > 0) listRef.current?.scrollIntoView({ block: "start" });
     } catch (e) { setError(e instanceof Error ? e.message : "Ricerca non riuscita."); }
     finally { setBusy(""); }
+  }
+
+  function navigatePage(targetIndex: number) {
+    if (pages[targetIndex]) {
+      setPageIndex(targetIndex); setError("");
+      listRef.current?.scrollIntoView({ block: "start" });
+    } else if (activePage?.nextToken) void scan(targetIndex, activePage.nextToken);
+  }
+
+  function updateItem(key: string, change: Partial<Item>) {
+    setPages((current) => current.map((page, index) => index === pageIndex
+      ? { ...page, items: page.items.map((item) => item.key === key ? { ...item, ...change } : item) }
+      : page));
   }
 
   async function importRows(rows: Item[]) {
@@ -56,9 +96,9 @@ export function GoogleInvoicesPanel({ onInvoice }: { onInvoice: (result: Archive
       try {
         const result: ArchivedInvoice = await action({ action: "import", messageId: row.id, partId: row.partId });
         onInvoice(result);
-        setItems((current) => current.map((item) => item.key === row.key ? { ...item, result, error: undefined } : item));
+        updateItem(row.key, { result, error: undefined });
       } catch (e) {
-        setItems((current) => current.map((item) => item.key === row.key ? { ...item, error: e instanceof Error ? e.message : "Importazione non riuscita." } : item));
+        updateItem(row.key, { error: e instanceof Error ? e.message : "Importazione non riuscita." });
         if (e instanceof ImportError && e.stopBatch) { setError(`Importazione interrotta. ${e.message} Le fatture successive non sono state elaborate.`); break; }
       }
     }
@@ -68,25 +108,33 @@ export function GoogleInvoicesPanel({ onInvoice }: { onInvoice: (result: Archive
   return <section className="border-y border-line py-5" aria-labelledby="google-title">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <h2 id="google-title" className="flex items-center gap-2 text-lg font-semibold"><Mail size={20} /> Gmail e Drive <span className="text-sm font-normal text-slate-500">Fatture SaaS</span></h2>
-      {status?.connected ? <button type="button" disabled={Boolean(busy)} className="flex items-center gap-2 text-sm disabled:opacity-50" onClick={async () => { setBusy("disconnect"); try { await action({ action: "disconnect" }); setStatus({ ...status, connected: false }); setItems([]); setScanned(false); } catch { setError("Scollegamento non riuscito."); } finally { setBusy(""); } }}><Unplug size={16} /> Scollega Google</button>
+      {status?.connected ? <button type="button" disabled={Boolean(busy)} className="flex items-center gap-2 text-sm disabled:opacity-50" onClick={async () => { setBusy("disconnect"); try { await action({ action: "disconnect" }); setStatus({ ...status, connected: false }); resetPages(); } catch { setError("Scollegamento non riuscito."); } finally { setBusy(""); } }}><Unplug size={16} /> Scollega Google</button>
         : status?.config.configured ? <a href="/api/google/connect" className="flex items-center gap-2 rounded-md bg-ink px-4 py-2 text-sm text-white"><Link2 size={16} /> Collega Google</a>
           : <span className="text-sm text-amber-800">Configurazione Google da completare</span>}
     </div>
     {error && <p role="alert" className="mt-3 text-sm text-red-700">{error}</p>}
     {status?.connected && <>
       <div className="mt-4 flex flex-wrap items-end gap-3">
-        <label className="text-sm">Mese ricezione mail<input aria-label="Mese ricezione mail" type="month" value={month} disabled={Boolean(busy)} onChange={(e) => { setMonth(e.target.value); setItems([]); setNextPage(null); setScanned(false); }} className="mt-1 block h-10 rounded-md border border-line bg-white px-3" /></label>
-        <label className="text-sm">Fornitore<select aria-label="Fornitore mail" value={supplier} disabled={Boolean(busy)} onChange={(e) => { setSupplier(e.target.value); setItems([]); setNextPage(null); setScanned(false); setError(""); }} className="mt-1 block h-10 w-44 max-w-full rounded-md border border-line bg-white px-3">
+        <label className="text-sm">Mese ricezione mail<input aria-label="Mese ricezione mail" type="month" value={month} disabled={Boolean(busy)} onChange={(e) => { setMonth(e.target.value); resetPages(); }} className="mt-1 block h-10 rounded-md border border-line bg-white px-3" /></label>
+        <label className="text-sm">Fornitore<select aria-label="Fornitore mail" value={supplier} disabled={Boolean(busy)} onChange={(e) => { setSupplier(e.target.value); resetPages(); }} className="mt-1 block h-10 w-44 max-w-full rounded-md border border-line bg-white px-3">
           <option value="">Tutti</option>
           {["OpenAI", "Anthropic", "Vercel", "Hetzner", "Supabase"].map((name) => <option key={name} value={name}>{name}</option>)}
         </select></label>
         <button disabled={Boolean(busy) || !month} onClick={() => scan()} className="flex h-10 items-center gap-2 rounded-md border border-line bg-white px-3 text-sm disabled:opacity-50"><Search size={16} /> Cerca mail</button>
-        <button disabled={Boolean(busy) || !items.some((i) => i.partId && !archivedId(i))} onClick={() => importRows(items.filter((i) => i.partId && !archivedId(i)))} className="flex h-10 items-center gap-2 rounded-md bg-ink px-3 text-sm text-white disabled:opacity-50"><Download size={16} /> Importa non archiviate</button>
+        <button disabled={Boolean(busy) || !items.some((i) => i.partId && !archivedId(i) && !manualDownloads.has(i.id))} onClick={() => importRows(items.filter((i) => i.partId && !archivedId(i) && !manualDownloads.has(i.id)))} className="flex h-10 items-center gap-2 rounded-md bg-ink px-3 text-sm text-white disabled:opacity-50"><Download size={16} /> Importa non scaricate</button>
         {busy && <span role="status" className="flex items-center gap-2 text-sm"><LoaderCircle className="animate-spin" size={16} /> {busy === "scan" ? "Ricerca mail" : "Operazione in corso"}</span>}
       </div>
       {scanned && !items.length && <p className="mt-4 text-sm text-slate-500">Nessuna mail trovata con i filtri selezionati.</p>}
       {archiveWarning && <p role="alert" className="mt-3 text-sm text-amber-800">{archiveWarning}</p>}
-      <ul className="mt-4 divide-y divide-line">
+      <div ref={listRef} className="mt-4 scroll-mt-4">
+      {scanned && <nav aria-label="Paginazione mail" className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3 text-sm">
+        <span>{supplier || "Tutti i fornitori"} · Pagina {pageIndex + 1}</span>
+        <div className="flex items-center gap-2">
+          <button type="button" aria-label="Pagina precedente" title="Pagina precedente" disabled={Boolean(busy) || pageIndex === 0} onClick={() => navigatePage(pageIndex - 1)} className="flex h-9 w-9 items-center justify-center rounded-md border border-line bg-white disabled:opacity-40"><ChevronLeft size={18} /></button>
+          <button type="button" aria-label="Pagina successiva" title="Pagina successiva" disabled={Boolean(busy) || !activePage?.nextToken} onClick={() => navigatePage(pageIndex + 1)} className="flex h-9 w-9 items-center justify-center rounded-md border border-line bg-white disabled:opacity-40"><ChevronRight size={18} /></button>
+        </div>
+      </nav>}
+      <ul className="divide-y divide-line">
         {items.map((item) => <li key={item.key} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm">
           <div className="min-w-0 flex-1 basis-64 break-words"><p className="font-medium">{item.supplier} · {item.fileName}</p><p className="text-slate-500">{item.subject}</p>
             <p className="mt-1 text-xs text-slate-500">Mail del {displayDate(item.date)}{(item.result?.invoice.invoice.invoice_date || item.archives?.[item.partId]?.invoiceDate) && <> · Fattura del {displayDate(item.result?.invoice.invoice.invoice_date || item.archives?.[item.partId]?.invoiceDate)}</>}</p>
@@ -94,12 +142,13 @@ export function GoogleInvoicesPanel({ onInvoice }: { onInvoice: (result: Archive
             {item.warning && <p className="text-amber-800">{item.warning}</p>}
             {item.error && <p role="alert" className="text-red-700">{item.error}</p>}
           </div>
-          <a href={`https://mail.google.com/mail/u/0/#all/${encodeURIComponent(item.id)}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1">Mail <ExternalLink size={14} /></a>
+          <a href={`https://mail.google.com/mail/u/0/#all/${encodeURIComponent(item.id)}`} target="_blank" rel="noopener noreferrer" onClick={() => markDownloaded(item.id, true)} className="inline-flex items-center gap-1">Mail <ExternalLink size={14} /></a>
+          <label className="inline-flex items-center gap-2 whitespace-nowrap"><input type="checkbox" aria-label={`Scaricata: ${item.subject}`} checked={Boolean(archivedId(item)) || manualDownloads.has(item.id)} disabled={Boolean(archivedId(item)) || Boolean(busy)} onChange={(event) => markDownloaded(item.id, event.target.checked)} className="h-4 w-4 accent-emerald-600" />Scaricata</label>
           {archivedId(item) && <a href={`https://drive.google.com/file/d/${encodeURIComponent(archivedId(item)!)}/view`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-emerald-700"><CheckCircle2 size={16} /> Archiviata su Drive <ExternalLink size={14} /></a>}
           {!item.result && item.partId && <button disabled={Boolean(busy)} onClick={() => importRows([item])} className="rounded-md border border-line bg-white px-3 py-2 disabled:opacity-50">{item.error ? "Riprova" : archivedId(item) ? "Carica in revisione" : "Importa"}</button>}
         </li>)}
       </ul>
-      {nextPage && <button disabled={Boolean(busy)} onClick={() => scan(true)} className="mt-2 text-sm underline disabled:opacity-50">Altre mail</button>}
+      </div>
     </>}
   </section>;
 }
