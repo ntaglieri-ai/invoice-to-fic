@@ -86,6 +86,33 @@ async function folder(session: GoogleSession, name: string, parent?: string) {
 }
 
 export type ArchivedInvoice = { invoice: ParsedInvoice; driveId: string; duplicate: boolean };
+export type DriveInvoiceFile = { id: string; name: string; invoiceDate?: string };
+
+export async function listDriveInvoices(session: GoogleSession, month: string, supplier: unknown = "", pageToken = "") {
+  monthQuery(month);
+  supplierQuery(supplier);
+  let parent: string | undefined;
+  for (const name of ["Fatture SaaS", month.slice(0, 4), month.slice(5, 7)]) {
+    const found = await findFile(session, "ficFolder", hash(`${parent ?? "root"}/${name}`));
+    if (!found) return { files: [], nextPageToken: null };
+    parent = found.id;
+  }
+  const params = new URLSearchParams({ q: `trashed = false and mimeType = 'application/vnd.google-apps.folder' and '${escapeQuery(parent!)}' in parents`, fields: "files(id,name)", pageSize: "100" });
+  const folders = await json<{ files: DriveFile[] }>(session, `/drive/v3/files?${params}`);
+  const selected = folders.files.filter((file) => !supplier || file.name === supplier);
+  if (!selected.length) return { files: [], nextPageToken: null };
+  const query = new URLSearchParams({ q: `trashed = false and mimeType = 'application/pdf' and (${selected.map((file) => `'${escapeQuery(file.id)}' in parents`).join(" or ")})`, fields: "files(id,name,appProperties),nextPageToken,incompleteSearch", pageSize: "10", orderBy: "name", ...(pageToken ? { pageToken } : {}) });
+  const data = await json<{ files: DriveFile[]; nextPageToken?: string; incompleteSearch?: boolean }>(session, `/drive/v3/files?${query}`);
+  if (data.incompleteSearch) throw new Error("Ricerca archivio incompleta. Riprova.");
+  return { files: data.files.map((file) => ({ id: file.id, name: file.name, invoiceDate: file.appProperties?.ficDate })), nextPageToken: data.nextPageToken ?? null };
+}
+
+export async function loadDriveInvoice(session: GoogleSession, fileId: string): Promise<ArchivedInvoice> {
+  if (!/^[a-zA-Z0-9_-]{1,200}$/.test(fileId)) throw new Error("Riferimento Drive non valido.");
+  const file = await json<DriveFile & { mimeType: string; trashed?: boolean }>(session, `/drive/v3/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,trashed,appProperties`);
+  if (file.trashed || file.mimeType !== "application/pdf" || !file.appProperties?.ficSource) throw new Error("Fattura non presente nell'archivio dell'app.");
+  return restore(session, file);
+}
 async function restore(session: GoogleSession, file: DriveFile): Promise<ArchivedInvoice> {
   const response = await googleFetch(session, `/drive/v3/files/${encodeURIComponent(file.id)}?alt=media`);
   const buffer = await limitedBuffer(response);

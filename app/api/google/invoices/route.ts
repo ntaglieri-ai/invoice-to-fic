@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { APP_AUTH_COOKIE, verifyAppSessionCookieValue } from "@/lib/simple-auth";
 import { freshGoogle, GOOGLE_COOKIE, GOOGLE_STATE, googleConfig, googleCookieOptions, openGoogle, sealGoogle, GoogleApiError, type GoogleSession } from "@/lib/google-session";
-import { importGoogleInvoice, scanGoogleInvoices } from "@/lib/google-invoices";
+import { importGoogleInvoice, scanGoogleInvoices, listDriveInvoices, loadDriveInvoice } from "@/lib/google-invoices";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -36,6 +36,8 @@ export async function POST(request: Request) {
     const stored = openGoogle<GoogleSession>(jar.get(GOOGLE_COOKIE)?.value);
     if (!stored) return reply({ error: "Collega Google prima di importare." }, 401);
     session = await freshGoogle(stored);
+    if (body.action === "drive-list" && typeof body.month === "string" && (body.pageToken === undefined || typeof body.pageToken === "string")) return reply(await listDriveInvoices(session, body.month, body.supplier, body.pageToken));
+    if (body.action === "drive-load" && typeof body.fileId === "string") return reply(await loadDriveInvoice(session, body.fileId));
     if (body.action === "scan" && typeof body.month === "string" && (body.pageToken === undefined || typeof body.pageToken === "string")) return reply(await scanGoogleInvoices(session, body.month, body.pageToken, body.supplier));
     if (body.action === "import" && typeof body.messageId === "string" && typeof body.partId === "string") return reply(await importGoogleInvoice(session, body.messageId, body.partId));
     return reply({ error: "Azione non valida." }, 400);

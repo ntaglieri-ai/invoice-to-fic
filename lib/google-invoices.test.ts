@@ -5,7 +5,7 @@ vi.mock("@/lib/invoice-link-download", () => ({ MAX_PDF_BYTES: 10 * 1024 * 1024,
 vi.mock("@/lib/invoice-parser", () => ({ parseInvoicePdf: vi.fn() }));
 import { googleFetch } from "./google-session";
 import { parseInvoicePdf } from "./invoice-parser";
-import { importGoogleInvoice, scanGoogleInvoices } from "./google-invoices";
+import { importGoogleInvoice, scanGoogleInvoices, listDriveInvoices, loadDriveInvoice } from "./google-invoices";
 import type { MailMessage } from "./mail-invoices";
 
 const session = { access: "a", refresh: "r", scope: "", expires: 0 };
@@ -38,6 +38,30 @@ beforeEach(() => {
     }
     throw new Error(`Unexpected mock API path`);
   });
+});
+it("lists archived PDFs by invoice month and supplier with pagination, without writes", async () => {
+  let folder = 0;
+  vi.mocked(googleFetch).mockImplementation(async (_session, path) => {
+    const params = new URLSearchParams(path.split("?")[1]);
+    const q = params.get("q")!;
+    if (q.includes("ficFolder")) return Response.json({ files: [{ id: `folder-${++folder}`, name: "folder" }] });
+    if (q.includes("application/vnd.google-apps.folder")) return Response.json({ files: [{ id: "openai", name: "OpenAI" }, { id: "hetzner", name: "Hetzner" }] });
+    expect(q).toContain("'openai' in parents"); expect(q).not.toContain("'hetzner' in parents");
+    expect(params.get("pageToken")).toBe("next");
+    return Response.json({ files: [{ id: "saved", name: "invoice.pdf", appProperties: { ficDate: "2026-09-18" } }], nextPageToken: "more" });
+  });
+  expect(await listDriveInvoices(session, "2026-09", "OpenAI", "next")).toEqual({ files: [{ id: "saved", name: "invoice.pdf", invoiceDate: "2026-09-18" }], nextPageToken: "more" });
+  expect(vi.mocked(googleFetch).mock.calls.every((call) => !call[2]?.method)).toBe(true);
+});
+it("rejects non-archived Drive files before downloading", async () => {
+  vi.mocked(googleFetch).mockResolvedValue(Response.json({ id: "other", name: "other.pdf", mimeType: "application/pdf", appProperties: {} }));
+  await expect(loadDriveInvoice(session, "other")).rejects.toThrow("archivio");
+  expect(googleFetch).toHaveBeenCalledTimes(1);
+});
+it("restores an archived PDF directly without Gmail or uploads", async () => {
+  vi.mocked(googleFetch).mockImplementation(async (_session, path) => path.includes("alt=media") ? new Response("%PDF-test") : Response.json({ id: "saved", name: "invoice.pdf", mimeType: "application/pdf", appProperties: { ficSource: "source" } }));
+  expect(await loadDriveInvoice(session, "saved")).toMatchObject({ driveId: "saved", duplicate: true });
+  expect(vi.mocked(googleFetch).mock.calls.every((call) => call[1].startsWith("/drive/") && !call[2]?.method)).toBe(true);
 });
 it("scans only the label and retains pagination without Drive writes", async () => {
   const result = await scanGoogleInvoices(session, "2026-09");

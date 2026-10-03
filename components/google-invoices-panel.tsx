@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, ChevronLeft, ChevronRight, Download, ExternalLink, Link2, LoaderCircle, Mail, Search, Unplug } from "lucide-react";
 import type { MailCandidate } from "@/lib/mail-invoices";
 import type { ArchivedInvoice } from "@/lib/google-invoices";
+import { DriveInvoicesPanel } from "@/components/drive-invoices-panel";
 
 type Status = { connected: boolean; config: { configured: boolean; missing: string[] } };
 type Item = MailCandidate & { partId: string; fileName: string; key: string; result?: ArchivedInvoice; error?: string };
@@ -149,6 +150,7 @@ export function GoogleInvoicesPanel({ onInvoice }: { onInvoice: (result: Archive
         </li>)}
       </ul>
       </div>
+      <DriveInvoicesPanel onInvoice={onInvoice} />
     </>}
   </section>;
 }
