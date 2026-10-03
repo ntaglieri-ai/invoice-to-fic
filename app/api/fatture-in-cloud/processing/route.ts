@@ -14,12 +14,18 @@ export async function POST(request: Request) {
   if (!await verifyAppSessionCookieValue(jar.get(APP_AUTH_COOKIE)?.value)) return NextResponse.json({ error: "Login richiesto." }, { status: 401 });
   const stored = unsealFattureInCloudSession(jar.get(FIC_SESSION_COOKIE)?.value ?? "");
   if (!stored) return NextResponse.json({ error: "Collega FIC." }, { status: 401 });
+  let session = stored;
+  const reply = (body: unknown, status = 200) => {
+    const response = NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
+    if (session !== stored) response.cookies.set(FIC_SESSION_COOKIE, sealFattureInCloudSession(session), { httpOnly: true, sameSite: "lax", secure: request.url.startsWith("https://"), maxAge: 60 * 60 * 24 * 30, path: "/" });
+    return response;
+  };
   try {
     const raw = await request.text();
     if (raw.length > 16000) throw new Error("Richiesta troppo grande.");
     const body = JSON.parse(raw);
     if (!Number.isSafeInteger(body.companyId) || body.companyId <= 0 || !Array.isArray(body.records) || body.records.length > 5) throw new Error("Riferimenti non validi.");
-    const session = shouldRefreshSession(stored) ? await refreshFattureInCloudSession(stored) : stored;
+    session = shouldRefreshSession(stored) ? await refreshFattureInCloudSession(stored) : stored;
     await requireCompany(session.accessToken, body.companyId);
     const suppliers = body.records.some((record: { expenseId?: number; td17Id?: number }) => !record.expenseId || !record.td17Id) ? await listExpenseSuppliers(session.accessToken, body.companyId) : [];
     const records = await Promise.all(body.records.map(async (record: { key: string; expenseId?: number; td17Id?: number; invoice: InvoiceFields }) => {
@@ -50,11 +56,9 @@ export async function POST(request: Request) {
       const [expenseExists, td17Exists] = await Promise.all([exists(record.expenseId, "received_documents"), exists(record.td17Id, "issued_documents")]);
       return { key: record.key, expenseExists, td17Exists, expenseId: recoveredExpenseId, td17Id: recoveredTd17Id };
     }));
-    const response = NextResponse.json({ records }, { headers: { "Cache-Control": "no-store" } });
-    if (session !== stored) response.cookies.set(FIC_SESSION_COOKIE, sealFattureInCloudSession(session), { httpOnly: true, sameSite: "lax", secure: request.url.startsWith("https://"), maxAge: 60 * 60 * 24 * 30, path: "/" });
-    return response;
+    return reply({ records });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Verifica non riuscita.";
-    return NextResponse.json({ error: /https?:|token|Bearer/i.test(message) ? "Verifica FIC non riuscita. Stati conservati." : message }, { status: 400 });
+    return reply({ error: /https?:|token|Bearer/i.test(message) ? "Verifica FIC non riuscita. Stati conservati." : message }, 400);
   }
 }
