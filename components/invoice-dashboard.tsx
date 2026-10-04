@@ -26,14 +26,16 @@ import { Td17Dialog } from "@/components/td17-dialog";
 import { GoogleInvoicesPanel } from "@/components/google-invoices-panel";
 import { currencyTotals } from "@/lib/invoice-totals";
 import { customerVatIssue } from "@/lib/customer-vat";
-import { processingKey, readProcessingLedger, PROCESSING_STORAGE_KEY, td17DeliveryState, type Td17DeliveryState, type ProcessingLedger, type ProcessingRecord } from "@/lib/processing-state";
+import { processingKey, td17DeliveryState, type Td17DeliveryState, type ProcessingRecord } from "@/lib/processing-state";
 import { canPrepareTd17, canWriteExpenses, ficConnectionNotice } from "@/lib/fic-permissions";
-import { HISTORY_KEY, invoiceMonth, readInvoiceHistory, serializeInvoiceHistory } from "@/lib/invoice-history";
+import { invoiceMonth } from "@/lib/invoice-history";
+import { useInvoiceMemory } from "@/components/use-invoice-memory";
 
 const SUPPLIERS: SupportedSupplier[] = ["OpenAI", "Anthropic", "Vercel", "Hetzner", "Supabase", "Sconosciuto"];
 
 type UiInvoice = ParsedInvoice & {
   id: string;
+  driveId?: string;
   ficId?: number;
   expenseDraft?: PreparedExpense;
   td17?: { companyId: number; id: number; state?: Td17DeliveryState; eiStatus?: string };
@@ -65,8 +67,6 @@ type FicStatus = {
 
 export function InvoiceDashboard() {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [invoices, setInvoices] = useState<UiInvoice[]>([]);
-  const [historyReady, setHistoryReady] = useState(false);
   const [historyMonth, setHistoryMonth] = useState("all");
   const [uploadState, setUploadState] = useState<UploadState>("idle");
   const [error, setError] = useState("");
@@ -77,15 +77,16 @@ export function InvoiceDashboard() {
   const [expenseId, setExpenseId] = useState<string | null>(null);
   const [td17Id, setTd17Id] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<"processing" | "archive">("processing");
-  const [ledger, setLedger] = useState<ProcessingLedger>({});
+  const memory = useInvoiceMemory<UiInvoice>(companyId);
+  const { invoices, setInvoices, ledger, setLedger } = memory;
   const [reviewPage, setReviewPage] = useState(0);
   const [reviewPageSize, setReviewPageSize] = useState(2);
   const [trackingBusy, setTrackingBusy] = useState(false);
   const [trackingNotice, setTrackingNotice] = useState("");
   const td17Invoice = invoices.find((item) => item.id === td17Id);
   const expenseInvoice = invoices.find((item) => item.id === expenseId);
-  const canWrite = Boolean(ficStatus?.connected && canWriteExpenses(ficStatus.scope));
-  const canTd17 = Boolean(ficStatus?.connected && canPrepareTd17(ficStatus.scope));
+  const canWrite = Boolean(memory.ready && !memory.error && !memory.pending && ficStatus?.connected && canWriteExpenses(ficStatus.scope));
+  const canTd17 = Boolean(memory.ready && !memory.error && !memory.pending && ficStatus?.connected && canPrepareTd17(ficStatus.scope));
 
   const companyVat = flattenCompanies(ficStatus?.companies ?? []).find((company) => String(company.id) === companyId)?.vat_number;
   const enrichedInvoices = useMemo(() => markDuplicates(invoices.map((item) => {
@@ -101,36 +102,17 @@ export function InvoiceDashboard() {
   const currentPage = Math.min(reviewPage, pageCount - 1);
   const visibleInvoices = monthlyInvoices.slice(currentPage * reviewPageSize, currentPage * reviewPageSize + reviewPageSize);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      try { setInvoices(readInvoiceHistory(localStorage.getItem(HISTORY_KEY))); }
-      catch { setError("Cronologia non disponibile: il browser impedisce il salvataggio."); }
-      setHistoryReady(true);
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, []);
-
-  useEffect(() => {
-    if (!historyReady) return;
-    try { localStorage.setItem(HISTORY_KEY, serializeInvoiceHistory(invoices)); }
-    catch { window.setTimeout(() => setError("Cronologia non salvata: spazio del browser esaurito o salvataggio bloccato. Non chiudere la pagina."), 0); }
-  }, [invoices, historyReady]);
-
   function saveProcessing(invoice: InvoiceFields, change: Partial<ProcessingRecord>, reset = false) {
     const key = processingKey(companyId, invoice);
     const next = { ...ledger };
     if (reset) delete next[key];
     else next[key] = { ...next[key], ...change, updatedAt: new Date().toISOString() };
     setLedger(next);
-    try { localStorage.setItem(PROCESSING_STORAGE_KEY, JSON.stringify(next)); }
-    catch { setError("Stato FIC non salvato nel browser. Mantieni aperta questa pagina."); }
   }
   function resetProcessingList() {
     const next = { ...ledger };
     for (const item of monthlyInvoices) delete next[processingKey(companyId, item.invoice)];
     setLedger(next);
-    try { localStorage.setItem(PROCESSING_STORAGE_KEY, JSON.stringify(next)); }
-    catch { setError("Reset non salvato nel browser."); }
   }
   async function verifyProcessing() {
     setTrackingBusy(true); setTrackingNotice(""); setError("");
@@ -152,7 +134,7 @@ export function InvoiceDashboard() {
         if (record.expenseExists === false) { delete next[record.key].expenseId; missing++; }
         if (record.td17Exists === false) { delete next[record.key].td17Id; delete next[record.key].td17State; delete next[record.key].td17EiStatus; missing++; }
       }
-      setLedger(next); localStorage.setItem(PROCESSING_STORAGE_KEY, JSON.stringify(next));
+      setLedger(next);
       setTrackingNotice(missing ? `${missing} documenti non piu presenti in FIC. Collegamenti rimossi, puoi ricrearli.` : "Documenti della pagina verificati in FIC.");
     } catch (e) { setError(e instanceof Error ? e.message : "Verifica non riuscita."); }
     finally { setTrackingBusy(false); }
@@ -170,7 +152,6 @@ export function InvoiceDashboard() {
     const response = await fetch("/api/fatture-in-cloud/status", { cache: "no-store" });
     if (!response.ok) throw new Error("Impossibile verificare la connessione FIC.");
     const payload = (await response.json()) as FicStatus;
-    setLedger(readProcessingLedger(localStorage.getItem(PROCESSING_STORAGE_KEY)));
     setFicStatus(payload);
     setFicNotice(ficConnectionNotice(new URLSearchParams(window.location.search).get("fic"), payload.connected, payload.scope));
     const companies = flattenCompanies(payload.companies).filter((item) => item.id && item.type !== "accountant");
@@ -183,6 +164,7 @@ export function InvoiceDashboard() {
   }
 
   async function disconnectFic() {
+    if (memory.pending) { setError("Attendi il salvataggio online prima di scollegare FIC."); return; }
     setFicBusy(true);
     await fetch("/api/fatture-in-cloud/disconnect", { method: "POST" });
     await refreshFicStatus();
@@ -190,6 +172,7 @@ export function InvoiceDashboard() {
   }
 
   async function uploadFiles(files: FileList | File[]) {
+    if (!memory.ready) { setError("Collega Google e FIC e attendi il recupero delle fatture gestite."); return; }
     const pdfs = Array.from(files).filter((file) => file.type === "application/pdf" || file.name.endsWith(".pdf"));
     if (pdfs.length === 0) {
       setError("Seleziona almeno un file PDF.");
@@ -227,6 +210,7 @@ export function InvoiceDashboard() {
   }
 
   function removeInvoice(id: string) {
+    if (!window.confirm("Rimuovere questa fattura dalla memoria del tool? Il PDF su Drive e i documenti FIC restano intatti.")) return;
     setInvoices((current) => current.filter((item) => item.id !== id));
     setExpenseId((current) => current === id ? null : current);
     setTd17Id((current) => current === id ? null : current);
@@ -294,7 +278,7 @@ export function InvoiceDashboard() {
               <Metric label="Spese FIC" value={String(monthlyInvoices.filter((item) => item.ficId).length)} />
               <Metric label="TD17 FIC" value={String(monthlyInvoices.filter((item) => item.td17).length)} />
             </div>
-            <form action="/api/auth/logout" method="post">
+            <form action="/api/auth/logout" method="post" onSubmit={(event) => { if (memory.pending) { event.preventDefault(); setError("Attendi il salvataggio online prima di uscire. Se non riesce, premi Riprova salvataggio."); } }}>
               <button
                 className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-medium hover:bg-slate-50"
                 type="submit"
@@ -311,7 +295,10 @@ export function InvoiceDashboard() {
           <button type="button" aria-pressed={workspace === "archive"} onClick={() => setWorkspace("archive")}><UploadCloud size={18} /> Raccolta e archivio</button>
         </nav>
         <div hidden={workspace !== "archive"}>
-        <GoogleInvoicesPanel onInvoice={(result) => setInvoices((current) => current.some((item) => item.id === `drive-${result.driveId}`) ? current : [...current, { ...result.invoice, id: `drive-${result.driveId}` }])} />
+        <GoogleInvoicesPanel onInvoice={(result) => {
+          if (!memory.ready) { setError("Collega FIC e recupera la memoria online prima di caricare le fatture in revisione."); return; }
+          setInvoices((current) => current.some((item) => item.id === `drive-${result.driveId}` || (item.invoice.invoice_number && item.invoice.supplier === result.invoice.invoice.supplier && item.invoice.invoice_number === result.invoice.invoice.invoice_number)) ? current : [...current, { ...result.invoice, driveId: result.driveId, id: `drive-${result.driveId}` }]);
+        }} />
         </div>
         <div hidden={workspace !== "processing"} className="processing-workspace">
 
@@ -322,11 +309,23 @@ export function InvoiceDashboard() {
           onDisconnect={disconnectFic}
           onRefresh={refreshFicStatus}
           companyId={companyId}
-          onCompanyChange={setCompanyId}
-          canWrite={canWrite}
+          onCompanyChange={(id) => { if (memory.pending || expenseId || td17Id || trackingBusy || uploadState === "uploading") { setError("Completa le operazioni e il salvataggio prima di cambiare azienda."); return; } setCompanyId(id); setHistoryMonth("all"); setReviewPage(0); }}
+          canWrite={Boolean(ficStatus?.connected && canWriteExpenses(ficStatus.scope))}
         />
 
-        <section className="grid gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-sm" aria-live="polite">
+          <span className={memory.error ? "text-red-700" : memory.pending || !memory.ready ? "text-amber-800" : "text-emerald-800"}>
+            {memory.error || (memory.pending ? "Salvataggio online in corso..." : memory.ready ? "Fatture gestite: salvate online" : companyId ? "Recupero delle fatture gestite..." : "Collega FIC e Google per ritrovare le fatture gestite")}
+          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            {memory.error && memory.ready && <button type="button" className="rounded-md border border-line bg-white px-3 py-2" onClick={memory.retrySave}>Riprova salvataggio</button>}
+            <button type="button" disabled={!companyId || memory.saving} title="Recupera i dati salvati online" className="inline-flex items-center gap-2 rounded-md border border-line bg-white px-3 py-2 disabled:opacity-40" onClick={memory.refresh}><RotateCcw size={15} />Ricarica memoria</button>
+            {!memory.ready && <a className="rounded-md border border-line bg-white px-3 py-2 text-blue-700" href="/api/google/connect">Collega Google</a>}
+            {memory.ready && memory.legacyCount > 0 && <button type="button" className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-blue-800" onClick={memory.migrateLegacy}>Recupera lavoro precedente ({memory.legacyCount})</button>}
+          </div>
+        </div>
+
+        <fieldset disabled={!memory.ready} className="min-w-0 border-0 p-0"><section className="grid gap-4">
           <div className="flex flex-col gap-4">
             <details className="manual-upload"><summary><UploadCloud size={18} /> Carica PDF dal Mac</summary><div
               className={`flex min-h-[260px] cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed bg-white p-8 text-center shadow-panel transition ${
@@ -405,7 +404,7 @@ export function InvoiceDashboard() {
           <div className="min-w-0 rounded-lg border border-line bg-white shadow-panel">
             <div className="flex flex-col gap-3 border-b border-line p-4 md:flex-row md:items-center md:justify-between">
               <div>
-                <h2 className="text-lg font-semibold">Cronologia fatture</h2>
+                <h2 className="text-lg font-semibold">Fatture gestite</h2>
                 <p className="text-sm text-slate-500">Modifica i campi incerti, controlla duplicati e approva.</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -485,6 +484,7 @@ export function InvoiceDashboard() {
             </div>
           </div>
         </section>
+        </fieldset>
         </div>
         {td17Invoice && companyId && <Td17Dialog
           key={`${td17Invoice.id}-${companyId}`}
@@ -717,7 +717,7 @@ function InvoiceRow({
           </button>}
           {invoice.ficId ? <FicReference label="Spesa" id={invoice.ficId} /> : <button type="button" disabled={!canCreate || invoice.status !== "approved" || invoice.invoice.currency !== "EUR"} onClick={() => onCreate(invoice.id)} className="fic-command"><Cloud size={16} />{draft ? "Rivedi bozza" : "Prepara spesa"}</button>}
           {invoice.td17?.companyId === activeCompanyId ? <FicReference label="TD17" id={invoice.td17.id} deliveryState={invoice.td17.state ?? "not_sent"} eiStatus={invoice.td17.eiStatus} /> : <button type="button" disabled={!canTd17 || invoice.status !== "approved" || invoice.invoice.currency !== "EUR" || invoice.invoice.tax_amount !== 0} onClick={() => onTd17(invoice.id)} className="fic-command"><FileText size={16} />Prepara TD17</button>}
-          {(invoice.ficId || invoice.td17) && <button type="button" title="Reset collegamenti locali; non cancella documenti FIC" aria-label={`Reset FIC ${invoice.invoice.invoice_number}`} onClick={onReset} className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-line text-slate-500"><RotateCcw size={15} /></button>}
+          {(invoice.ficId || invoice.td17) && <button type="button" title="Reset riferimenti nella memoria del tool; non cancella documenti FIC" aria-label={`Reset FIC ${invoice.invoice.invoice_number}`} onClick={onReset} className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-line text-slate-500"><RotateCcw size={15} /></button>}
         </td>
       </tr>
       <tr className={duplicate ? "bg-amber-50/70" : "border-b border-slate-100 bg-white"}>
@@ -727,13 +727,14 @@ function InvoiceRow({
               <button
                 type="button"
                 aria-label={`Rimuovi fattura ${invoice.invoice.invoice_number || invoice.file_name}`}
-                title="Rimuovi dalla revisione (Drive e FIC restano invariati)"
+                title="Rimuovi dalla memoria del tool (Drive e FIC restano invariati)"
                 className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-line text-slate-500 hover:border-red-300 hover:bg-red-50 hover:text-red-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
                 onClick={() => onRemove(invoice.id)}
               >
                 <Trash2 size={16} />
               </button>
               <span className="font-medium text-slate-600">{invoice.file_name}</span>
+              {invoice.driveId && <a href={`https://drive.google.com/file/d/${encodeURIComponent(invoice.driveId)}/view`} target="_blank" rel="noopener noreferrer" title="Apri PDF su Drive" aria-label={`PDF su Drive ${invoice.invoice.invoice_number}`} className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-blue-200 text-blue-700"><ExternalLink size={15} /></a>}
             </div>
             <label className="flex items-center gap-2">
               <span>Valuta</span>
