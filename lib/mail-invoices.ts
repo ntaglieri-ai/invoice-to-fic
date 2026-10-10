@@ -3,7 +3,7 @@ import type { SupportedSupplier } from "@/lib/types";
 
 export type MailPart = { partId?: string; filename?: string; mimeType?: string; body?: { attachmentId?: string; data?: string; size?: number }; parts?: MailPart[]; headers?: { name: string; value: string }[] };
 export type MailMessage = { id: string; labelIds?: string[]; internalDate?: string; payload: MailPart };
-export type MailCandidate = { id: string; subject: string; supplier: SupportedSupplier; date: string; invoices: { partId: string; name: string }[]; receipts: number; linkAvailable: boolean; warning?: string; archives?: Record<string, { driveId: string; invoiceDate?: string }> };
+export type MailCandidate = { id: string; subject: string; supplier: SupportedSupplier; date: string; invoiceNumber?: string; invoices: { partId: string; name: string }[]; receipts: number; linkAvailable: boolean; warning?: string; archives?: Record<string, { driveId: string; invoiceDate?: string; name?: string }> };
 
 const SENDERS: Record<string, SupportedSupplier> = {
   "noreply@tm.openai.com": "OpenAI", "invoice+statements@mail.anthropic.com": "Anthropic",
@@ -38,6 +38,24 @@ export function openaiInvoiceLink(message: MailMessage) {
   return null;
 }
 
+export function openaiInvoiceNumber(message: MailMessage) {
+  for (const part of flattenParts(message.payload)) {
+    if (!part.body?.data || !["text/html", "text/plain"].includes(part.mimeType ?? "")) continue;
+    const body = Buffer.from(part.body.data, "base64url").toString();
+    let text = body;
+    if (part.mimeType === "text/html") {
+      const $ = load(body);
+      $("script,style").remove();
+      $("p,div,li,tr,br").after("\n");
+      $("a").before(" ");
+      text = $.root().text();
+    }
+    const number = text.match(/(?:Numero\s+fattura|Invoice\s+number)\s*:?\s*([a-z0-9]+(?:-[a-z0-9]+)*-\d+)\b/i)?.[1];
+    if (number && number.length <= 64) return number.toUpperCase();
+  }
+  return undefined;
+}
+
 export function classifyMail(message: MailMessage): MailCandidate {
   const from = mailHeader(message, "from").trim().toLowerCase();
   const sender = from.match(/<([^<>]+)>/)?.[1] ?? from;
@@ -48,7 +66,7 @@ export function classifyMail(message: MailMessage): MailCandidate {
   const linkAvailable = supplier === "OpenAI" && Boolean(openaiInvoiceLink(message));
   const dateParts = Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat("en", { timeZone: "Europe/Rome", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date) : [];
   const receivedDate = dateParts.length ? ["year", "month", "day"].map((type) => dateParts.find((part) => part.type === type)?.value).join("-") : "";
-  return { id: message.id, subject: mailHeader(message, "subject"), supplier, date: receivedDate, invoices: supplier === "Sconosciuto" ? [] : invoices, receipts: parts.filter((p) => /receipt|ricevuta/i.test(p.filename!)).length, linkAvailable,
+  return { id: message.id, subject: mailHeader(message, "subject"), supplier, date: receivedDate, ...(supplier === "OpenAI" ? { invoiceNumber: openaiInvoiceNumber(message) } : {}), invoices: supplier === "Sconosciuto" ? [] : invoices, receipts: parts.filter((p) => /receipt|ricevuta/i.test(p.filename!)).length, linkAvailable,
     warning: supplier === "Sconosciuto" ? "Mittente non riconosciuto: verifica manuale." : !invoices.length && !linkAvailable ? "Nessuna fattura recuperabile automaticamente." : undefined };
 }
 

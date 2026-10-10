@@ -42,6 +42,8 @@ export function ExpenseDialog({ invoice, companyId, initialDraft, onClose, onPre
 
   useEffect(() => {
     dialog.current?.showModal();
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     let cancelled = false;
     expenseRequest({ action: "suppliers", companyId }).then((payload) => {
       if (cancelled) return;
@@ -62,7 +64,7 @@ export function ExpenseDialog({ invoice, companyId, initialDraft, onClose, onPre
       }
     }).catch((error) => { if (!cancelled) setError(error.message); })
       .finally(() => { if (!cancelled) setBusy(false); });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; document.body.style.overflow = previousOverflow; };
   }, [companyId, invoice, initialDraft]);
 
   function selectSupplier(id: string) {
@@ -138,7 +140,7 @@ export function ExpenseDialog({ invoice, companyId, initialDraft, onClose, onPre
   const pending = preview?.status === "needs_configuration";
   const input = "mt-1 h-10 w-full rounded-md border border-line bg-white px-3 text-sm";
   return (
-    <dialog ref={dialog} aria-labelledby="expense-title" className="m-auto max-h-[90dvh] w-[min(680px,calc(100%-32px))] overflow-y-auto rounded-lg border border-line p-0 text-ink shadow-xl backdrop:bg-black/40"
+    <dialog ref={dialog} aria-labelledby="expense-title" className="app-drawer operation-drawer"
       onCancel={(event) => { event.preventDefault(); if (!busy) onClose(); }}>
       <header className="flex items-center justify-between border-b border-line p-5">
         <h2 id="expense-title" className="text-lg font-semibold">{result ? "Spesa registrata" : pending ? "Spesa preparata" : preview ? "Conferma spesa" : "Prepara spesa"}</h2>

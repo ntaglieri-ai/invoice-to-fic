@@ -72,12 +72,22 @@ it("scans only the label and retains pagination without Drive writes", async () 
 it("finds previously archived invoices during a fresh scan without downloading PDFs", async () => {
   stored = { id: "saved", name: "invoice.pdf", appProperties: { ficSource: createHash("sha256").update("abc:1").digest("hex"), ficDate: "2026-09-12" } };
   const result = await scanGoogleInvoices(session, "2026-09");
-  expect(result.items[0].archives).toEqual({ "1": { driveId: "saved", invoiceDate: "2026-09-12" } });
+  expect(result.items[0].archives).toEqual({ "1": { driveId: "saved", invoiceDate: "2026-09-12", name: "invoice.pdf" } });
   expect(parseInvoicePdf).not.toHaveBeenCalled();
   const calls = vi.mocked(googleFetch).mock.calls;
   expect(calls.every(([, , init]) => !init?.method || init.method === "GET")).toBe(true);
   const path = calls.find(([, path]) => path.startsWith("/drive/v3/files?"))![1];
   expect(new URLSearchParams(path.split("?")[1]).get("q")).toContain("trashed = false");
+});
+it("matches an OpenAI invoice archived from another mail by its full invoice number", async () => {
+  message.payload.headers = [{ name: "From", value: "noreply@tm.openai.com" }];
+  message.payload.parts = [{ mimeType: "text/html", body: { data: Buffer.from('<p>Numero fattura: IA8NO7NL-0189</p><a href="https://invoice.stripe.com/i/test">Visualizza la fattura</a>').toString("base64url") } }];
+  stored = { id: "saved", name: "Invoice-IA8NO7NL-0189.pdf", appProperties: { ficInvoice: createHash("sha256").update("OpenAI:IA8NO7NL-0189").digest("hex"), ficDate: "2026-09-17" } };
+  const result = await scanGoogleInvoices(session, "2026-09");
+  expect(result.items[0].invoiceNumber).toBe("IA8NO7NL-0189");
+  expect(result.items[0].archives?.["openai-link"]).toMatchObject({ driveId: "saved", name: "Invoice-IA8NO7NL-0189.pdf", invoiceDate: "2026-09-17" });
+  expect(parseInvoicePdf).not.toHaveBeenCalled();
+  expect(uploaded).toBeUndefined();
 });
 it("reports unknown archive status without hiding Gmail results when Drive fails", async () => {
   const original = vi.mocked(googleFetch).getMockImplementation()!;

@@ -1,6 +1,9 @@
 # Tracciamento spese e TD17
 
-La dashboard separa Raccolta e archivio (mail e PDF su Drive) da Spese e TD17.
+La schermata principale e il registro mensile Fatture estere. Acquisisci fatture
+apre un drawer separato per Gmail, Drive e PDF dal computer. Il dettaglio di ogni
+fattura contiene correzioni, approvazione, spesa e TD17 come passi successivi.
+L'acquisizione aggiunge il documento al registro, senza scritture finanziarie FIC.
 Le fatture gestite vengono ricordate online: dati estratti e corretti, approvazione,
 riferimento al PDF su Drive, spesa FIC e TD17 con stato. Non e un nuovo archivio PDF.
 La memoria e un registro JSON nella cartella Drive "Invoice to FIC - memoria del tool",
@@ -25,14 +28,14 @@ dopo conferma dell'azienda selezionata. I record online e quelli gia rimossi pre
 sulla vecchia copia. Ricarica memoria recupera lo stato online; quando ci sono modifiche
 non salvate chiede conferma prima di scartarle.
 
-Verifica stati FIC controlla la pagina di revisione corrente. Gli ID conosciuti
+Aggiorna da FIC controlla tutto il mese selezionato, non solo la pagina visibile. Gli ID conosciuti
 sono verificati tramite letture API. Solo una risposta 404 rimuove un collegamento;
 errori di connessione o permessi conservano gli stati. Per riferimenti mancanti,
 il controllo cerca le spese e i TD17 usando le regole di corrispondenza gia usate
 dai controlli duplicati e il VAT del fornitore. Questo consente di recuperare i
 riferimenti anche su un altro browser o dopo aver cancellato i dati locali.
 
-Il reset singolo o del mese selezionato azzera solo i riferimenti nella memoria online.
+Il reset singolo nel dettaglio azzera solo i riferimenti nella memoria online.
 Non elimina documenti FIC o PDF Drive. Una successiva verifica puo recuperare
 documenti ancora presenti: per ripartire davvero, eliminare quelli desiderati
 in FIC e poi verificare nuovamente. I controlli server contro le duplicazioni
@@ -40,13 +43,35 @@ restano attivi anche dopo un reset.
 
 La rimozione di una fattura dalla memoria richiede conferma, viene ricordata online e
 non elimina la spesa, il TD17 o il PDF originale. Per recuperare documenti FIC esistenti
-resta disponibile Verifica stati FIC dopo aver ricaricato la fattura da Drive.
+si puo selezionare un mese per recuperarli direttamente da FIC.
+
+## Recupero Mensile Da FIC
+
+Selezionare un mese nel registro legge le spese FIC del mese e dell'azienda
+selezionata anche quando la memoria online e vuota. Sono riconosciuti OpenAI,
+Anthropic, Vercel, Hetzner e Supabase. I TD17 vengono associati tramite le stesse
+regole dei controlli duplicati (riferimento originale e fornitore, oppure marker
+del tool), non per il solo importo. Le fatture recuperate vengono ricordate online.
+Aggiorna da FIC ripete il recupero e verifica tutti i riferimenti gia noti del mese.
+Nessuna creazione, cancellazione o trasmissione SDI viene eseguita.
+
+Un TD17 senza una spesa sorgente ancora presente non viene ricostruito da zero
+da questo recupero; se gia nella memoria, viene comunque verificato. Le fatture
+gia ricordate e i PDF Drive non vengono rimossi quando un mese FIC e vuoto o una
+lettura fallisce. Reset e rimozione sono raggruppati in Altre azioni.
+
+Il registro ha ricerca, filtri di lavorazione e paginazione (8, 16 o 32 righe).
+Le impostazioni azienda e connessioni sono in un drawer dedicato. I dialoghi di
+spesa e TD17 mantengono anteprima e conferma obbligatoria; i dati della fattura
+restano stabili mentre la conferma e aperta, anche durante il salvataggio online.
+Le fatture recuperate da FIC possono essere collegate al PDF acquisito da Drive
+senza aggiungere una seconda riga con la stessa identita.
 
 Spesa creata e TD17 creato sono stati separati. TD17 creato non significa inviato
 allo SDI. L'invio rimane una conferma manuale dentro FIC.
 
 Il TD17 usa due indicatori: Creato / non inviato (giallo) e Inviato (verde acqua).
-Verifica stati FIC legge anche ei_status: sent, processing, accepted,
+Aggiorna da FIC legge anche ei_status: sent, processing, accepted,
 not_delivered e no_response indicano che la trasmissione e avvenuta. Gli stati
 di attesa, errore, scarto o non conosciuti non sono promossi a verde. Il valore
 FIC originale rimane nel tooltip per distinguere eventuali anomalie; verde

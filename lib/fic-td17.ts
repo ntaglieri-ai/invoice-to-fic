@@ -8,7 +8,7 @@ import { buildTd17Payload, eligibleTd17Vat, td17Amounts, validateTd17, validateT
 import type { InvoiceFields } from "@/lib/types";
 
 type PreInfo = { vat_types_list?: Td17Vat[]; default_values?: { payment_method?: { ei_payment_method?: string } } };
-type ExistingTd17 = {
+export type ExistingTd17 = {
   id: number; number?: number; numeration?: string; subject?: string; ei_status?: string;
   entity?: { id?: number; vat_number?: string };
   ei_data?: { invoice_number?: string; invoice_date?: string };
@@ -53,6 +53,10 @@ function reference(companyId: number, invoice: InvoiceFields, supplier: Pick<Td1
 
 export async function findExistingTd17(token: string, companyId: number, invoice: InvoiceFields, supplier: Pick<Td17Supplier, "id" | "vat_number">) {
   const documents = await listAll<ExistingTd17>(token, `/c/${companyId}/issued_documents?type=self_supplier_invoice&fields=id,number,numeration,subject,entity,ei_raw,ei_data,ei_status`);
+  return matchExistingTd17(documents, companyId, invoice, supplier);
+}
+
+export function matchExistingTd17(documents: ExistingTd17[], companyId: number, invoice: InvoiceFields, supplier: Pick<Td17Supplier, "id" | "vat_number">) {
   const marker = reference(companyId, invoice, supplier);
   return documents.find((doc) => {
     if (doc.subject === marker) return true;

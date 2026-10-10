@@ -1,4 +1,5 @@
 import pdf from "pdf-parse";
+import { invoiceTaxReview } from "./invoice-tax-review";
 import { extractCustomerVat } from "@/lib/customer-vat";
 import { EMPTY_INVOICE, completeResult, firstAmount, firstMatch, parseCurrency, parseDate, parseVat } from "@/lib/suppliers/common";
 import { supplierParsers } from "@/lib/suppliers";
@@ -41,6 +42,8 @@ export function parseInvoiceText(text: string, fileName = "invoice.pdf"): Parsed
   }
 
   if (invoice.supplier === "Sconosciuto") warnings.push("Fornitore non riconosciuto automaticamente.");
+  const taxReview = invoiceTaxReview(invoice);
+  if (taxReview) warnings.push(taxReview);
   if (!invoice.invoice_number) warnings.push("Numero fattura mancante o incerto.");
   if (!invoice.invoice_date) warnings.push("Data fattura mancante o incerta.");
   if (invoice.total_amount === null) warnings.push("Totale fattura mancante o incerto.");

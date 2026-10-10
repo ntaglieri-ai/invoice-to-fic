@@ -1,4 +1,5 @@
 import type { InvoiceFields } from "@/lib/types";
+import { invoiceTaxReview } from "./invoice-tax-review";
 
 export const EXPENSE_COST_CENTER = "WEB";
 
@@ -42,6 +43,8 @@ export function invoiceErrors(value: unknown): string[] {
   if (!value || typeof value !== "object") return ["Fattura non valida."];
   const invoice = value as InvoiceFields;
   const errors: string[] = [];
+  const taxReview = invoiceTaxReview(invoice);
+  if (taxReview) errors.push(taxReview);
   if (!["OpenAI", "Anthropic", "Vercel", "Hetzner", "Supabase"].includes(invoice.supplier)) errors.push("Fornitore non riconosciuto.");
   if (typeof invoice.invoice_number !== "string" || !invoice.invoice_number.trim() || invoice.invoice_number.length > 100 || /[\x00-\x1f]/.test(invoice.invoice_number)) errors.push("Numero fattura non valido.");
   if (!isValidInvoiceDate(invoice.invoice_date)) errors.push("Data fattura non valida.");

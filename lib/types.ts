@@ -21,6 +21,7 @@ export type InvoiceFields = {
 };
 
 export type ParsedInvoice = {
+  checked_at?: string;
   index: number;
   file_name: string;
   invoice: InvoiceFields;

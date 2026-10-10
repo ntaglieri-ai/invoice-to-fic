@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allowedInvoiceUrl, classifyMail, inRomeMonth, monthQuery, openaiInvoiceLink, supplierQuery, type MailMessage } from "./mail-invoices";
+import { allowedInvoiceUrl, classifyMail, inRomeMonth, monthQuery, openaiInvoiceLink, openaiInvoiceNumber, supplierQuery, type MailMessage } from "./mail-invoices";
 import { browserHostAllowed } from "./invoice-link-download";
 
 function mail(from = "invoice+statements@vercel.com"): MailMessage {
@@ -9,6 +9,14 @@ function mail(from = "invoice+statements@vercel.com"): MailMessage {
   ] } };
 }
 describe("Gmail invoice candidates", () => {
+  it.each([['text/html', '<p>Numero fattura: <b>IA8NO7NL-0189</b></p>'], ['text/plain', 'Invoice number: IA8NO7NL-0189']])("extracts the complete OpenAI number from %s", (mimeType, body) => {
+    const m = mail("noreply@tm.openai.com");
+    m.payload.parts = [{ mimeType, body: { data: Buffer.from(body).toString("base64url") } }];
+    expect(openaiInvoiceNumber(m)).toBe("IA8NO7NL-0189");
+    expect(classifyMail(m).invoiceNumber).toBe("IA8NO7NL-0189");
+    m.payload.headers![0].value = "attacker@example.com";
+    expect(classifyMail(m).invoiceNumber).toBeUndefined();
+  });
   it("builds supplier queries exclusively from trusted senders", () => {
     expect(supplierQuery()).toBe("");
     expect(supplierQuery("OpenAI")).toBe("{from:noreply@tm.openai.com}");

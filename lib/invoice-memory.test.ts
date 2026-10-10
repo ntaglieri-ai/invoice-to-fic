@@ -5,6 +5,14 @@ const operation = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(1
 const event = (n: number, value: ManagedInvoice | null, revision: string | null = null): MemoryEvent => ({ version: 1, operationId: operation(n), changes: [{ id: invoice.id, expectedRevision: revision, value }] });
 
 describe("online managed invoices", () => {
+  it("persists acknowledgement separately from fiscal approval and validates its date", () => {
+    const checked = cleanManagedInvoice({ ...invoice, checked_at: "2026-10-06T09:00:00Z", status: "needs_review" });
+    expect(checked.checked_at).toBe("2026-10-06T09:00:00Z");
+    expect(checked.status).toBe("needs_review");
+    const { records } = replayMemory([event(1, checked)]);
+    expect(records[invoice.id].value?.checked_at).toBe(checked.checked_at);
+    expect(() => cleanManagedInvoice({ ...invoice, checked_at: "invalid" })).toThrow("Data controllo non valida");
+  });
   it("stores only fields, approval, Drive reference and FIC states, never PDF or drafts", () => {
     const clean = cleanManagedInvoice({ ...invoice, expenseDraft: { secret: true }, pdf: "base64" });
     expect(clean.extracted_text_preview).toBe("");

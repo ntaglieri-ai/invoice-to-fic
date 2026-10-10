@@ -26,11 +26,12 @@ export const anthropicParser: SupplierParser = {
         /Net\s+amount\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
       ]),
       tax_amount: firstAmount(text, [
+        /VAT\s*-\s*Italy\s*[(-]\s*22%\s+on\s*(?:€|\$|£|EUR|USD|GBP)?\s*[\d,.]+\s*[)-]\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
         /Tax\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
         /VAT\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
       ]),
       total_amount: firstAmount(text, [
-        /Total\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
+        /\bTotal\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
         /Amount\s+paid\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
       ]),
     });

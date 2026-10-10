@@ -1,926 +1,256 @@
 "use client";
 
-import {
-  AlertTriangle,
-  Check,
-  CheckCircle2,
-  Cloud,
-  FileText,
-  Link2,
-  LogOut,
-  Pencil,
-  RotateCcw,
-  Trash2,
-  Copy,
-  ExternalLink,
-  ChevronLeft,
-  ChevronRight,
-  Clock3,
-  UploadCloud,
-} from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { InvoiceFields, InvoiceStatus, ParsedInvoice, SupportedSupplier } from "@/lib/types";
-import { invoiceErrors, type PreparedExpense } from "@/lib/expense-validation";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { AlertTriangle, ArrowLeft, ArrowRight, CheckCheck, ChevronLeft, ChevronRight, Files, Layers, Link2, LogOut, Plus, RotateCcw, Search, Settings2 } from "lucide-react";
 import { ExpenseDialog } from "@/components/expense-dialog";
 import { Td17Dialog } from "@/components/td17-dialog";
-import { GoogleInvoicesPanel } from "@/components/google-invoices-panel";
+import { AcquisitionPanel } from "@/components/acquisition-panel";
+import { AppDrawer } from "@/components/app-drawer";
+import { InvoiceRegister } from "@/components/invoice-register";
+import { InvoiceDetail } from "@/components/invoice-detail";
+import { useInvoiceMemory } from "@/components/use-invoice-memory";
+import { invoiceErrors, type PreparedExpense } from "@/lib/expense-validation";
+import { canPrepareTd17, canWriteExpenses, ficConnectionNotice } from "@/lib/fic-permissions";
 import { currencyTotals } from "@/lib/invoice-totals";
 import { customerVatIssue } from "@/lib/customer-vat";
-import { processingKey, td17DeliveryState, type Td17DeliveryState, type ProcessingRecord } from "@/lib/processing-state";
-import { canPrepareTd17, canWriteExpenses, ficConnectionNotice } from "@/lib/fic-permissions";
 import { invoiceMonth } from "@/lib/invoice-history";
-import { useInvoiceMemory } from "@/components/use-invoice-memory";
+import { processingKey, td17DeliveryState, type ProcessingRecord } from "@/lib/processing-state";
+import { matchesWorkflow, newestInvoicesFirst, workflowStage, type WorkflowFilter, type WorkflowInvoice } from "@/lib/invoice-workflow";
+import type { ManagedInvoice } from "@/lib/invoice-memory";
+import type { ArchivedInvoice } from "@/lib/google-invoices";
+import type { InvoiceFields, InvoiceStatus, ParsedInvoice } from "@/lib/types";
 
-const SUPPLIERS: SupportedSupplier[] = ["OpenAI", "Anthropic", "Vercel", "Hetzner", "Supabase", "Sconosciuto"];
-
-type UiInvoice = ParsedInvoice & {
-  id: string;
-  driveId?: string;
-  ficId?: number;
-  expenseDraft?: PreparedExpense;
-  td17?: { companyId: number; id: number; state?: Td17DeliveryState; eiStatus?: string };
-};
-
-type UploadState = "idle" | "dragging" | "uploading" | "error";
-
-type FicCompany = {
-  vat_number?: string | null;
-  id: number | null;
-  name: string | null;
-  type: string | null;
-  controlled_companies?: FicCompany[] | null;
-};
-
-type FicStatus = {
-  connected: boolean;
-  config: {
-    configured: boolean;
-    missing: string[];
-    redirectUri: string;
-    scopes: string[];
-  };
-  companies: FicCompany[];
-  expiresAt?: string;
-  scope?: string;
-  error?: string;
-};
+type UiInvoice = WorkflowInvoice & { expenseDraft?: PreparedExpense };
+type FicCompany = { id: number | null; name: string | null; type: string | null; vat_number?: string | null; controlled_companies?: FicCompany[] | null };
+type FicStatus = { connected: boolean; config: { configured: boolean; missing: string[] }; companies: FicCompany[]; scope?: string; error?: string };
+type Operation = { type: "expense" | "td17"; id: string; invoice: InvoiceFields; companyId: number; draft?: PreparedExpense };
+type Verification = { key: string; expenseExists?: boolean; td17Exists?: boolean; expenseId?: number; td17Id?: number; td17EiStatus?: string };
+const filterLabels: [WorkflowFilter, string][] = [["all", "Tutte"], ["work", "Da lavorare"], ["send", "TD17 da inviare"], ["done", "Completate"]];
+function currentMonth() {
+  const parts = new Intl.DateTimeFormat("en", { timeZone: "Europe/Rome", year: "numeric", month: "2-digit" }).formatToParts(new Date());
+  return `${parts.find((part) => part.type === "year")!.value}-${parts.find((part) => part.type === "month")!.value}`;
+}
+function monthLabel(month: string) { return month === "all" ? "Tutti i mesi" : month === "undated" ? "Senza data" : new Intl.DateTimeFormat("it-IT", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${month}-01T12:00:00Z`)); }
+function flatten(companies: FicCompany[]): FicCompany[] { return companies.flatMap((company) => [company, ...flatten(company.controlled_companies ?? [])]); }
+async function post(path: string, body: unknown) {
+  const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "Operazione non riuscita.");
+  return result;
+}
 
 export function InvoiceDashboard() {
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [historyMonth, setHistoryMonth] = useState("all");
-  const [uploadState, setUploadState] = useState<UploadState>("idle");
-  const [error, setError] = useState("");
-  const [ficStatus, setFicStatus] = useState<FicStatus | null>(null);
-  const [ficBusy, setFicBusy] = useState(false);
-  const [ficNotice, setFicNotice] = useState<ReturnType<typeof ficConnectionNotice>>(null);
+  const [month, setMonth] = useState(currentMonth);
+  const [filter, setFilter] = useState<WorkflowFilter>("all");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(8);
+  const [fic, setFic] = useState<FicStatus | null>(null);
+  const [googleConnected, setGoogleConnected] = useState(false);
   const [companyId, setCompanyId] = useState("");
-  const [expenseId, setExpenseId] = useState<string | null>(null);
-  const [td17Id, setTd17Id] = useState<string | null>(null);
-  const [workspace, setWorkspace] = useState<"processing" | "archive">("processing");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [drawer, setDrawer] = useState<"acquire" | "settings" | null>(null);
+  const [operation, setOperation] = useState<Operation | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [acquiring, setAcquiring] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [updated, setUpdated] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const syncedRef = useRef("");
   const memory = useInvoiceMemory<UiInvoice>(companyId);
   const { invoices, setInvoices, ledger, setLedger } = memory;
-  const [reviewPage, setReviewPage] = useState(0);
-  const [reviewPageSize, setReviewPageSize] = useState(2);
-  const [trackingBusy, setTrackingBusy] = useState(false);
-  const [trackingNotice, setTrackingNotice] = useState("");
-  const td17Invoice = invoices.find((item) => item.id === td17Id);
-  const expenseInvoice = invoices.find((item) => item.id === expenseId);
-  const canWrite = Boolean(memory.ready && !memory.error && !memory.pending && ficStatus?.connected && canWriteExpenses(ficStatus.scope));
-  const canTd17 = Boolean(memory.ready && !memory.error && !memory.pending && ficStatus?.connected && canPrepareTd17(ficStatus.scope));
+  const companies = flatten(fic?.companies ?? []).filter((company) => company.id && company.type !== "accountant");
+  const company = companies.find((company) => String(company.id) === companyId);
+  const canWrite = Boolean(memory.ready && !memory.error && !memory.pending && fic?.connected && canWriteExpenses(fic.scope));
+  const canTd17 = Boolean(memory.ready && !memory.error && !memory.pending && fic?.connected && canPrepareTd17(fic.scope));
+  const enriched = (() => {
+    const seen = new Set<string>();
+    return invoices.map((item) => {
+      const record = ledger[processingKey(companyId, item.invoice)];
+      const issue = customerVatIssue(item.invoice, company?.vat_number);
+      const identity = item.invoice.invoice_number ? processingKey(companyId, item.invoice) : "";
+      const duplicate = Boolean(identity && seen.has(identity));
+      if (identity) seen.add(identity);
+      const warnings = item.warnings.filter((warning) => !warning.startsWith("Partita IVA cliente"));
+      return { ...item, ficId: record?.expenseId, td17: record?.td17Id ? { companyId: Number(companyId), id: record.td17Id, state: record.td17State, eiStatus: record.td17EiStatus } : undefined,
+        status: duplicate ? "duplicate" as InvoiceStatus : issue ? "needs_review" as InvoiceStatus : record?.expenseId || record?.td17Id ? "approved" as InvoiceStatus : item.status === "duplicate" ? invoiceErrors(item.invoice).length ? "needs_review" as InvoiceStatus : "extracted" as InvoiceStatus : item.status,
+        warnings: issue ? [issue, ...warnings] : warnings };
+    });
+  })();
+  const monthly = enriched.filter((item) => month === "all" || invoiceMonth(item) === month);
+  const filtered = newestInvoicesFirst(monthly.filter((item) => matchesWorkflow(item, filter, query)));
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const currentPage = Math.min(page, totalPages - 1);
+  const visible = filtered.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+  const selected = enriched.find((item) => item.id === selectedId);
+  const months = [...new Set([currentMonth(), month, ...Array.from({ length: 24 }, (_, index) => { const now = new Date(); return new Date(Date.UTC(now.getFullYear(), now.getMonth() - index, 1)).toISOString().slice(0, 7); }), ...invoices.map(invoiceMonth)])].filter((value) => value !== "all").sort().reverse();
+  const locked = busy || acquiring || uploading || Boolean(operation);
 
-  const companyVat = flattenCompanies(ficStatus?.companies ?? []).find((company) => String(company.id) === companyId)?.vat_number;
-  const enrichedInvoices = useMemo(() => markDuplicates(invoices.map((item) => {
-    const record = ledger[processingKey(companyId, item.invoice)];
-    const issue = customerVatIssue(item.invoice, companyVat);
-    const warnings = item.warnings.filter((warning) => !warning.startsWith("Partita IVA cliente"));
-    return { ...item, ficId: record?.expenseId, td17: record?.td17Id ? { companyId: Number(companyId), id: record.td17Id, state: record.td17State, eiStatus: record.td17EiStatus } : undefined, status: issue ? "needs_review" as InvoiceStatus : record?.expenseId || record?.td17Id ? "approved" as InvoiceStatus : item.status,
-      warnings: issue ? [issue, ...warnings] : warnings };
-  })), [invoices, companyVat, ledger, companyId]);
-  const months = [...new Set(invoices.map(invoiceMonth))].sort().reverse();
-  const monthlyInvoices = enrichedInvoices.filter((item) => historyMonth === "all" || invoiceMonth(item) === historyMonth);
-  const pageCount = Math.max(1, Math.ceil(monthlyInvoices.length / reviewPageSize));
-  const currentPage = Math.min(reviewPage, pageCount - 1);
-  const visibleInvoices = monthlyInvoices.slice(currentPage * reviewPageSize, currentPage * reviewPageSize + reviewPageSize);
-
-  function saveProcessing(invoice: InvoiceFields, change: Partial<ProcessingRecord>, reset = false) {
-    const key = processingKey(companyId, invoice);
-    const next = { ...ledger };
-    if (reset) delete next[key];
-    else next[key] = { ...next[key], ...change, updatedAt: new Date().toISOString() };
-    setLedger(next);
-  }
-  function resetProcessingList() {
-    const next = { ...ledger };
-    for (const item of monthlyInvoices) delete next[processingKey(companyId, item.invoice)];
-    setLedger(next);
-  }
-  async function verifyProcessing() {
-    setTrackingBusy(true); setTrackingNotice(""); setError("");
+  async function refreshConnections() {
     try {
-      const records = visibleInvoices.map((item) => ({ key: processingKey(companyId, item.invoice), expenseId: item.ficId, td17Id: item.td17?.id, invoice: item.invoice }));
-      const response = await fetch("/api/fatture-in-cloud/processing", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ companyId: Number(companyId), records }) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Verifica FIC non riuscita.");
-      const next = { ...ledger }; let missing = 0;
-      for (const record of data.records as { key: string; expenseExists?: boolean; td17Exists?: boolean; expenseId?: number; td17Id?: number; td17EiStatus?: string }[]) {
-        if (!next[record.key] && !record.expenseId && !record.td17Id) continue;
-        next[record.key] = { ...next[record.key], updatedAt: new Date().toISOString() };
-        if (record.expenseId) next[record.key].expenseId = record.expenseId;
-        if (record.td17Id) next[record.key].td17Id = record.td17Id;
-        if (record.td17EiStatus !== undefined) {
-          next[record.key].td17EiStatus = record.td17EiStatus;
-          next[record.key].td17State = td17DeliveryState(record.td17EiStatus);
-        }
-        if (record.expenseExists === false) { delete next[record.key].expenseId; missing++; }
-        if (record.td17Exists === false) { delete next[record.key].td17Id; delete next[record.key].td17State; delete next[record.key].td17EiStatus; missing++; }
+      const response = await fetch("/api/fatture-in-cloud/status", { cache: "no-store" });
+      if (!response.ok) throw new Error("Connessione FIC non disponibile.");
+      const result: FicStatus = await response.json();
+      setFic(result);
+      const available = flatten(result.companies).filter((item) => item.id && item.type !== "accountant");
+      setCompanyId((current) => available.some((item) => String(item.id) === current) ? current : String(available[0]?.id ?? ""));
+      const connectionNotice = ficConnectionNotice(new URLSearchParams(window.location.search).get("fic"), result.connected, result.scope);
+      if (connectionNotice?.error) setError(connectionNotice.message);
+    } catch (e) { setError(e instanceof Error ? e.message : "Connessione non disponibile."); }
+    try { const response = await fetch("/api/google/invoices", { cache: "no-store" }); if (response.ok) setGoogleConnected((await response.json()).connected); }
+    catch { setGoogleConnected(false); }
+  }
+  const initializeConnections = useEffectEvent(() => { void refreshConnections(); });
+  useEffect(() => { const timer = setTimeout(() => initializeConnections(), 0); return () => clearTimeout(timer); }, []);
+
+  function saveProcessing(invoice: InvoiceFields, change: Partial<ProcessingRecord>) {
+    setLedger((current) => { const key = processingKey(companyId, invoice); return { ...current, [key]: { ...current[key], ...change, updatedAt: new Date().toISOString() } }; });
+  }
+  async function refreshMonth(target = month) {
+    if (!memory.ready || !companyId || busy || memory.pending) return;
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const recovered: ManagedInvoice[] = target === "all" || target === "undated" ? [] : (await post("/api/fatture-in-cloud/month", { companyId: Number(companyId), month: target })).invoices;
+      const known = enriched.filter((item) => (target === "all" || invoiceMonth(item) === target) && (item.ficId || item.td17));
+      const verified: Verification[] = [];
+      for (let offset = 0; offset < known.length; offset += 5) {
+        const records = known.slice(offset, offset + 5).map((item) => ({ key: processingKey(companyId, item.invoice), expenseId: item.ficId, td17Id: item.td17?.id, invoice: item.invoice }));
+        verified.push(...(await post("/api/fatture-in-cloud/processing", { companyId: Number(companyId), records })).records);
       }
-      setLedger(next);
-      setTrackingNotice(missing ? `${missing} documenti non piu presenti in FIC. Collegamenti rimossi, puoi ricrearli.` : "Documenti della pagina verificati in FIC.");
-    } catch (e) { setError(e instanceof Error ? e.message : "Verifica non riuscita."); }
-    finally { setTrackingBusy(false); }
+      setInvoices((current) => {
+        const next = [...current];
+        for (const item of recovered) if (!next.some((existing) => processingKey(companyId, existing.invoice) === processingKey(companyId, item.invoice))) {
+          const { processing: _processing, ...invoice } = item; void _processing; next.push(invoice);
+        }
+        return next;
+      });
+      setLedger((current) => {
+        const next = { ...current };
+        for (const record of verified) {
+          next[record.key] = { ...next[record.key], updatedAt: new Date().toISOString() };
+          if (record.expenseId) next[record.key].expenseId = record.expenseId;
+          if (record.td17Id) next[record.key].td17Id = record.td17Id;
+          if (record.expenseExists === false) delete next[record.key].expenseId;
+          if (record.td17Exists === false) { delete next[record.key].td17Id; delete next[record.key].td17State; delete next[record.key].td17EiStatus; }
+          else if (record.td17EiStatus !== undefined) { next[record.key].td17EiStatus = record.td17EiStatus; next[record.key].td17State = td17DeliveryState(record.td17EiStatus); }
+        }
+        for (const item of recovered) if (item.processing) next[processingKey(companyId, item.invoice)] = { ...next[processingKey(companyId, item.invoice)], ...item.processing };
+        return next;
+      });
+      setUpdated(new Date().toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }));
+      setNotice(recovered.length ? `${recovered.length} fatture recuperate da FIC.` : "Stati FIC aggiornati.");
+    } catch (e) { setError(e instanceof Error ? e.message : "Aggiornamento FIC non riuscito. Stati conservati."); }
+    finally { setBusy(false); }
   }
-  const groups = groupInvoices(monthlyInvoices);
-  const globalTotal = currencyTotals(monthlyInvoices);
-  const approvedCount = monthlyInvoices.filter((item) => item.status === "approved").length;
-
+  const initialSync = useEffectEvent(() => { void refreshMonth(month); });
   useEffect(() => {
-    refreshFicStatus();
-  }, []);
+    if (!memory.ready || !companyId) return;
+    const key = `${companyId}:${month}`;
+    if (syncedRef.current === key) return;
+    syncedRef.current = key;
+    initialSync();
+  }, [memory.ready, companyId, month]);
 
-  async function refreshFicStatus() {
+  function changeMonth(value: string) { if (!locked && !memory.pending) { setMonth(value); setPage(0); setSelectedId(null); setNotice(""); setQuery(""); } }
+  function shiftMonth(delta: number) {
+    if (!/^\d{4}-\d{2}$/.test(month)) return;
+    changeMonth(new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 1 + delta, 1)).toISOString().slice(0, 7));
+  }
+  function acquire(result: ArchivedInvoice) {
+    setInvoices((current) => {
+      const existing = current.find((item) => item.driveId === result.driveId || (result.invoice.invoice.invoice_number && processingKey(companyId, item.invoice) === processingKey(companyId, result.invoice.invoice)));
+      if (existing) return existing.driveId ? current : current.map((item) => item.id === existing.id ? { ...item, driveId: result.driveId } : item);
+      return [...current, { ...result.invoice, driveId: result.driveId, id: `drive-${result.driveId}` }];
+    });
+    const importedMonth = invoiceMonth({ ...result.invoice, id: result.driveId });
+    if (importedMonth !== month && month !== "all") setNotice(`Fattura acquisita nel mese ${monthLabel(importedMonth)}.`);
+  }
+  async function uploadFiles(files: File[]) {
+    if (!memory.ready || memory.error) return;
+    const pdfs = files.filter((file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
+    if (!pdfs.length) { setError("Seleziona almeno un PDF."); return; }
+    setUploading(true); setError("");
     try {
-    const response = await fetch("/api/fatture-in-cloud/status", { cache: "no-store" });
-    if (!response.ok) throw new Error("Impossibile verificare la connessione FIC.");
-    const payload = (await response.json()) as FicStatus;
-    setFicStatus(payload);
-    setFicNotice(ficConnectionNotice(new URLSearchParams(window.location.search).get("fic"), payload.connected, payload.scope));
-    const companies = flattenCompanies(payload.companies).filter((item) => item.id && item.type !== "accountant");
-    setCompanyId((current) => companies.some((item) => String(item.id) === current) ? current : String(companies[0]?.id ?? ""));
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "Connessione FIC non disponibile.");
-      setFicStatus(null);
-      setCompanyId("");
-    }
+      const body = new FormData(); pdfs.forEach((file) => body.append("files", file));
+      const response = await fetch("/api/invoices/upload", { method: "POST", body });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Lettura PDF non riuscita.");
+      setInvoices((current) => [...current, ...(data.invoices as ParsedInvoice[]).map((item) => ({ ...item, id: `${item.file_name}-${crypto.randomUUID()}` }))]);
+      setNotice(`${data.invoices.length} fatture acquisite. Sono nel mese riportato sul documento.`);
+    } catch (e) { setError(e instanceof Error ? e.message : "Acquisizione non riuscita."); }
+    finally { setUploading(false); }
   }
-
-  async function disconnectFic() {
-    if (memory.pending) { setError("Attendi il salvataggio online prima di scollegare FIC."); return; }
-    setFicBusy(true);
-    await fetch("/api/fatture-in-cloud/disconnect", { method: "POST" });
-    await refreshFicStatus();
-    setFicBusy(false);
+  function updateInvoice(field: keyof InvoiceFields, value: string) {
+    if (!selected || selected.ficId || selected.td17) return;
+    const normalized = value.includes(",") ? value.replace(/\./g, "").replace(",", ".") : value;
+    const amount = normalized.trim() && Number.isFinite(Number(normalized)) ? Math.round(Number(normalized) * 100) / 100 : null;
+    setInvoices((current) => current.map((item) => item.id === selected.id ? { ...item, checked_at: undefined, status: "needs_review", expenseDraft: undefined, invoice: { ...item.invoice, [field]: field.endsWith("_amount") ? amount : value } } : item));
   }
-
-  async function uploadFiles(files: FileList | File[]) {
-    if (!memory.ready) { setError("Collega Google e FIC e attendi il recupero delle fatture gestite."); return; }
-    const pdfs = Array.from(files).filter((file) => file.type === "application/pdf" || file.name.endsWith(".pdf"));
-    if (pdfs.length === 0) {
-      setError("Seleziona almeno un file PDF.");
-      setUploadState("error");
-      return;
-    }
-
-    setUploadState("uploading");
-    setError("");
-
-    const data = new FormData();
-    pdfs.forEach((file) => data.append("files", file));
-
-    const response = await fetch("/api/invoices/upload", {
-      method: "POST",
-      body: data,
-    });
-
-    if (!response.ok) {
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-      setError(payload?.error ?? "Errore durante l'elaborazione dei PDF.");
-      setUploadState("error");
-      return;
-    }
-
-    const payload = (await response.json()) as { invoices: ParsedInvoice[] };
-    setInvoices((current) => [
-      ...current,
-      ...payload.invoices.map((invoice) => ({
-        ...invoice,
-        id: `${invoice.file_name}-${invoice.index}-${crypto.randomUUID()}`,
-      })),
-    ]);
-    setUploadState("idle");
-  }
-
-  function removeInvoice(id: string) {
-    if (!window.confirm("Rimuovere questa fattura dalla memoria del tool? Il PDF su Drive e i documenti FIC restano intatti.")) return;
-    setInvoices((current) => current.filter((item) => item.id !== id));
-    setExpenseId((current) => current === id ? null : current);
-    setTd17Id((current) => current === id ? null : current);
-  }
-
-  function clearInvoices() {
-    if (!window.confirm("Rimuovere le fatture di questa vista dalla cronologia? I PDF su Drive e i documenti FIC non saranno cancellati.")) return;
-    setInvoices((current) => current.filter((item) => historyMonth !== "all" && invoiceMonth(item) !== historyMonth));
-    setExpenseId(null);
-    setTd17Id(null);
-  }
-
-  function updateInvoice(id: string, field: keyof InvoiceFields, rawValue: string) {
-    const candidate = enrichedInvoices.find((item) => item.id === id);
-    if (candidate?.ficId || candidate?.td17) return;
-    setInvoices((current) =>
-      current.map((item) => {
-        if (item.id !== id || item.ficId || item.td17) return item;
-        const value = field.endsWith("_amount") ? parseEditableNumber(rawValue) : rawValue;
-        return {
-          ...item,
-          status: "needs_review",
-          expenseDraft: undefined,
-          invoice: {
-            ...item.invoice,
-            [field]: value,
-          },
-        };
-      }),
-    );
-  }
-
-  function approveInvoice(id: string) {
-    const candidate = enrichedInvoices.find((item) => item.id === id);
-    if (!candidate || candidate.status === "duplicate" || candidate.ficId) return;
-    const errors = invoiceErrors(candidate.invoice);
-    const customerIssue = customerVatIssue(candidate.invoice, companyVat);
-    if (customerIssue) errors.push(customerIssue);
+  function approveInvoice() {
+    if (!selected || selected.status === "duplicate" || selected.ficId || selected.td17) return;
+    const errors = invoiceErrors(selected.invoice);
+    const issue = customerVatIssue(selected.invoice, company?.vat_number); if (issue) errors.push(issue);
     if (errors.length) { setError(errors.join(" ")); return; }
+    setError(""); setInvoices((current) => current.map((item) => item.id === selected.id ? { ...item, checked_at: new Date().toISOString(), status: "approved" } : item));
+  }
+  function acknowledgeInvoice(id: string) {
+    if (memory.pending || memory.error || !memory.ready || locked) return;
+    const item = enriched.find((item) => item.id === id);
+    if (!item || item.status === "duplicate") return;
+    const issues = [...invoiceErrors(item.invoice), ...(customerVatIssue(item.invoice, company?.vat_number) ? ["Intestazione da verificare"] : [])];
     setError("");
-    setInvoices((current) =>
-      current.map((item) => (item.id === id ? { ...item, status: "approved" as InvoiceStatus } : item)),
-    );
+    setInvoices((current) => current.map((invoice) => invoice.id === id ? { ...invoice, checked_at: new Date().toISOString(), status: issues.length ? "needs_review" : "approved" } : invoice));
+    setNotice(issues.length ? "Controllo registrato. Restano verifiche da risolvere prima di spesa e TD17." : "Fattura controllata. Ora puoi registrare la spesa.");
   }
-
-  function approveAll() {
-    const eligible = new Set(monthlyInvoices.filter((item) => item.status !== "duplicate" && !item.ficId && !customerVatIssue(item.invoice, companyVat) && invoiceErrors(item.invoice).length === 0).map((item) => item.id));
-    setInvoices((current) =>
-      current.map((item) => (eligible.has(item.id) ? { ...item, status: "approved" as InvoiceStatus } : item)),
-    );
+  function beginOperation(type: Operation["type"], id?: string) {
+    const target = id ? enriched.find((item) => item.id === id) : selected;
+    if (!target || target.status !== "approved" || invoiceErrors(target.invoice).length || (type === "expense" ? !canWrite || target.ficId : !canTd17 || !target.ficId || target.td17)) return;
+    setSelectedId(target.id);
+    setOperation({ type, id: target.id, invoice: structuredClone(target.invoice), companyId: Number(companyId), draft: target.expenseDraft });
   }
-
-  return (
-    <main className="min-h-screen px-6 py-8">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
-        <header className="flex flex-col gap-3 border-b border-line pb-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-normal text-ink">Invoice to FIC</h1>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="grid min-w-0 flex-1 grid-cols-3 gap-2 text-sm lg:grid-cols-5">
-              <Metric label="Fatture" value={String(monthlyInvoices.length)} />
-              <Metric label="Approvate" value={`${approvedCount}/${monthlyInvoices.length}`} />
-              <Metric label="Totali" value={globalTotal} />
-              <Metric label="Spese FIC" value={String(monthlyInvoices.filter((item) => item.ficId).length)} />
-              <Metric label="TD17 FIC" value={String(monthlyInvoices.filter((item) => item.td17).length)} />
-            </div>
-            <form action="/api/auth/logout" method="post" onSubmit={(event) => { if (memory.pending) { event.preventDefault(); setError("Attendi il salvataggio online prima di uscire. Se non riesce, premi Riprova salvataggio."); } }}>
-              <button
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-medium hover:bg-slate-50"
-                type="submit"
-                title="Esci"
-                aria-label="Esci"
-              >
-                <LogOut size={16} />
-              </button>
-            </form>
-          </div>
-        </header>
-        <nav aria-label="Aree di lavoro" className="workspace-tabs">
-          <button type="button" aria-pressed={workspace === "processing"} onClick={() => setWorkspace("processing")}><Cloud size={18} /> Spese e TD17 <span>{enrichedInvoices.length}</span></button>
-          <button type="button" aria-pressed={workspace === "archive"} onClick={() => setWorkspace("archive")}><UploadCloud size={18} /> Raccolta e archivio</button>
+  function removeInvoice() {
+    if (!selected || !window.confirm("Rimuovere questa fattura dal registro? Il PDF su Drive e i documenti FIC restano intatti.")) return;
+    const id = selected.id; setSelectedId(null); setInvoices((current) => current.filter((item) => item.id !== id));
+  }
+  function resetProcessing() {
+    if (!selected || !window.confirm("Azzerare i riferimenti di questa fattura? Nessun documento verra cancellato in FIC.")) return;
+    const key = processingKey(companyId, selected.invoice); setLedger((current) => { const next = { ...current }; delete next[key]; return next; });
+  }
+  async function disconnect(service: "fic" | "google") {
+    if (memory.pending || locked || !window.confirm(`Scollegare ${service === "fic" ? "Fatture in Cloud" : "Google"}? Le fatture salvate restano intatte.`)) return;
+    setBusy(true);
+    try {
+      if (service === "google") await post("/api/google/invoices", { action: "disconnect" });
+      else { const response = await fetch("/api/fatture-in-cloud/disconnect", { method: "POST" }); if (!response.ok) throw new Error("Scollegamento non riuscito."); }
+      setSelectedId(null); await refreshConnections(); memory.refresh();
+    } catch (e) { setError(e instanceof Error ? e.message : "Scollegamento non riuscito."); }
+    finally { setBusy(false); }
+  }
+  const feedback = <>{(error || memory.error) && <div role="alert" className="sf-alert alert-error"><AlertTriangle size={17}/><span>{error || memory.error}</span>{memory.error && <button onClick={memory.ready ? memory.retrySave : memory.refresh} className="sf-text-button">Riprova</button>}</div>}{notice && <p role="status" className="sf-notice">{notice}</p>}</>;
+  return <div className="manager-shell">
+    <aside className="manager-sidebar"><div className="manager-brand"><span><Layers size={22}/></span><strong>MosTag</strong></div><div className="manager-company"><strong>{company?.name || "La tua azienda"}</strong><small>Gestione aziendale</small></div><nav aria-label="Navigazione gestionale"><small>ACQUISTI</small><button className="manager-nav active" onClick={() => { if (!locked) { setDrawer(null); setSelectedId(null); } }}><Files size={18}/>Fatture estere</button><button className="manager-nav" disabled={locked} onClick={() => { setSelectedId(null); setDrawer("settings"); }}><Settings2 size={18}/>Impostazioni</button></nav><div className="sidebar-connections"><span><i className={fic?.connected ? "online-dot" : "offline-dot"}/>Fatture in Cloud</span><span><i className={googleConnected ? "online-dot" : "offline-dot"}/>Gmail e Drive</span></div></aside>
+    <main className="manager-main"><header className="manager-header"><div><p>Acquisti / Fatture estere</p><h1>Fatture estere</h1></div><div className="manager-actions"><div className="month-switch"><button className="sf-icon" aria-label="Mese precedente" title="Mese precedente" disabled={locked || memory.pending || month === "all" || month === "undated"} onClick={() => shiftMonth(-1)}><ChevronLeft size={17}/></button><select aria-label="Mese cronologia" value={month} disabled={locked || memory.pending} onChange={(e) => changeMonth(e.target.value)}><option value="all">Tutti i mesi</option>{months.map((value) => <option key={value} value={value}>{monthLabel(value)}</option>)}</select><button className="sf-icon" aria-label="Mese successivo" title="Mese successivo" disabled={locked || memory.pending || month === "all" || month === "undated"} onClick={() => shiftMonth(1)}><ChevronRight size={17}/></button></div><button className="sf-button sf-primary" disabled={locked} onClick={() => { setSelectedId(null); setDrawer("acquire"); }}><Plus size={17}/>Acquisisci fatture</button></div></header>
+      <section className="manager-overview"><div className="manager-metrics"><div><strong>{monthly.length}</strong><small>Fatture del mese</small></div><div><strong>{currencyTotals(monthly)}</strong><small>Totale acquisti</small></div><div className="metric-aqua"><strong>{monthly.filter((item) => workflowStage(item) === "done").length} / {monthly.length}</strong><small>Completate</small></div></div><div className="manager-sync"><span>{busy ? "Aggiornamento FIC..." : updated ? `FIC aggiornato alle ${updated}` : "FIC da aggiornare"}<small className={memory.error ? "sync-error" : memory.pending ? "sync-pending" : ""}>{memory.error ? "Salvataggio non riuscito" : memory.pending ? "Salvataggio in corso..." : memory.ready ? "Salvato online" : "Collega Google e FIC"}</small></span><button className="sf-icon" title="Aggiorna da Fatture in Cloud" aria-label="Aggiorna da FIC" disabled={!memory.ready || memory.pending || locked} onClick={() => void refreshMonth()}><RotateCcw size={17} className={busy ? "animate-spin" : ""}/></button><form action="/api/auth/logout" method="post" onSubmit={(e) => { if (memory.pending || locked) { e.preventDefault(); setError("Completa le operazioni e il salvataggio prima di uscire."); } }}><button className="sf-icon" title="Esci" aria-label="Esci"><LogOut size={17}/></button></form></div></section>
+      {feedback}
+      {!memory.ready && !memory.error && <p className="sf-notice">{fic?.connected && googleConnected ? "Caricamento delle fatture gestite..." : "Collega Google e FIC nelle impostazioni per iniziare."}<button className="sf-text-button" onClick={() => setDrawer("settings")}>Impostazioni</button></p>}
+      {memory.legacyCount > 0 && <p className="sf-notice"><button className="sf-text-button" onClick={memory.migrateLegacy}>Recupera lavoro precedente ({memory.legacyCount})</button></p>}
+      <div className="register-toolbar"><nav className="register-filters" aria-label="Stato fatture">{filterLabels.map(([key, label]) => <button key={key} aria-pressed={filter === key} onClick={() => { setFilter(key); setPage(0); }}>{label}<span>{monthly.filter((item) => key === "all" || workflowStage(item) === key).length}</span></button>)}</nav><label className="register-search"><Search size={16}/><input aria-label="Cerca fattura o fornitore" value={query} onChange={(e) => { setQuery(e.target.value); setPage(0); }} placeholder="Cerca fattura o fornitore"/></label></div>
+      <InvoiceRegister invoices={visible} onOpen={setSelectedId} onCheck={acknowledgeInvoice} onExpense={(id) => beginOperation("expense", id)} onTd17={(id) => beginOperation("td17", id)} canWrite={canWrite} canTd17={canTd17} pending={memory.pending || locked || Boolean(memory.error)} ready={memory.ready} onAcquire={() => setDrawer("acquire")}/>
+      <footer className="register-footer">
+        <span>{filtered.length ? currentPage * pageSize + 1 : 0} - {Math.min((currentPage + 1) * pageSize, filtered.length)} di {filtered.length} fatture · {monthLabel(month)}</span>
+        <nav aria-label="Paginazione fatture">
+          <select aria-label="Fatture per pagina" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(0); }}>{[8, 16, 32].map((size) => <option key={size} value={size}>{size} per pagina</option>)}</select>
+          <span>{currentPage + 1} / {totalPages}</span>
+          <button className="sf-icon" aria-label="Fatture precedenti" title="Pagina precedente" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}><ArrowLeft size={15}/></button>
+          <button className="sf-icon" aria-label="Fatture successive" title="Pagina successiva" disabled={currentPage + 1 >= totalPages} onClick={() => setPage(currentPage + 1)}><ArrowRight size={15}/></button>
         </nav>
-        <div hidden={workspace !== "archive"}>
-        <GoogleInvoicesPanel onInvoice={(result) => {
-          if (!memory.ready) { setError("Collega FIC e recupera la memoria online prima di caricare le fatture in revisione."); return; }
-          setInvoices((current) => current.some((item) => item.id === `drive-${result.driveId}` || (item.invoice.invoice_number && item.invoice.supplier === result.invoice.invoice.supplier && item.invoice.invoice_number === result.invoice.invoice.invoice_number)) ? current : [...current, { ...result.invoice, driveId: result.driveId, id: `drive-${result.driveId}` }]);
-        }} />
-        </div>
-        <div hidden={workspace !== "processing"} className="processing-workspace">
-
-        {ficNotice && <p role={ficNotice.error ? "alert" : "status"} className={`rounded-md border p-4 text-sm ${ficNotice.error ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-800"}`}>{ficNotice.message}</p>}
-        <FattureInCloudPanel
-          busy={ficBusy}
-          status={ficStatus}
-          onDisconnect={disconnectFic}
-          onRefresh={refreshFicStatus}
-          companyId={companyId}
-          onCompanyChange={(id) => { if (memory.pending || expenseId || td17Id || trackingBusy || uploadState === "uploading") { setError("Completa le operazioni e il salvataggio prima di cambiare azienda."); return; } setCompanyId(id); setHistoryMonth("all"); setReviewPage(0); }}
-          canWrite={Boolean(ficStatus?.connected && canWriteExpenses(ficStatus.scope))}
-        />
-
-        <div className="flex flex-wrap items-center justify-between gap-2 text-sm" aria-live="polite">
-          <span className={memory.error ? "text-red-700" : memory.pending || !memory.ready ? "text-amber-800" : "text-emerald-800"}>
-            {memory.error || (memory.pending ? "Salvataggio online in corso..." : memory.ready ? "Fatture gestite: salvate online" : companyId ? "Recupero delle fatture gestite..." : "Collega FIC e Google per ritrovare le fatture gestite")}
-          </span>
-          <div className="flex flex-wrap items-center gap-2">
-            {memory.error && memory.ready && <button type="button" className="rounded-md border border-line bg-white px-3 py-2" onClick={memory.retrySave}>Riprova salvataggio</button>}
-            <button type="button" disabled={!companyId || memory.saving} title="Recupera i dati salvati online" className="inline-flex items-center gap-2 rounded-md border border-line bg-white px-3 py-2 disabled:opacity-40" onClick={memory.refresh}><RotateCcw size={15} />Ricarica memoria</button>
-            {!memory.ready && <a className="rounded-md border border-line bg-white px-3 py-2 text-blue-700" href="/api/google/connect">Collega Google</a>}
-            {memory.ready && memory.legacyCount > 0 && <button type="button" className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-blue-800" onClick={memory.migrateLegacy}>Recupera lavoro precedente ({memory.legacyCount})</button>}
-          </div>
-        </div>
-
-        <fieldset disabled={!memory.ready} className="min-w-0 border-0 p-0"><section className="grid gap-4">
-          <div className="flex flex-col gap-4">
-            <details className="manual-upload"><summary><UploadCloud size={18} /> Carica PDF dal Mac</summary><div
-              className={`flex min-h-[260px] cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed bg-white p-8 text-center shadow-panel transition ${
-                uploadState === "dragging" ? "border-mint bg-emerald-50" : "border-line hover:border-slate-400"
-              }`}
-              onClick={() => fileInputRef.current?.click()}
-              onDragEnter={(event) => {
-                event.preventDefault();
-                setUploadState("dragging");
-              }}
-              onDragOver={(event) => event.preventDefault()}
-              onDragLeave={(event) => {
-                event.preventDefault();
-                setUploadState("idle");
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                uploadFiles(event.dataTransfer.files);
-              }}
-            >
-              <UploadCloud className="mb-4 text-slate-500" size={42} />
-              <h2 className="text-lg font-semibold">Carica PDF fatture</h2>
-              <p className="mt-2 max-w-xs text-sm leading-6 text-slate-600">
-                Trascina più PDF insieme o selezionali dal computer. I file vengono letti in memoria e non salvati.
-              </p>
-              <input
-                ref={fileInputRef}
-                className="sr-only"
-                type="file"
-                accept="application/pdf,.pdf"
-                multiple
-                onChange={(event) => {
-                  if (event.target.files) uploadFiles(event.target.files);
-                  event.currentTarget.value = "";
-                }}
-              />
-              <button
-                className="mt-6 inline-flex h-10 items-center gap-2 rounded-md bg-ink px-4 text-sm font-medium text-white disabled:cursor-wait disabled:bg-slate-400"
-                disabled={uploadState === "uploading"}
-                type="button"
-              >
-                {uploadState === "uploading" ? <RotateCcw className="animate-spin" size={16} /> : <UploadCloud size={16} />}
-                {uploadState === "uploading" ? "Elaborazione..." : "Seleziona PDF"}
-              </button>
-            </div>
-
-            </details>
-            {error ? (
-              <div className="flex items-start gap-3 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                <AlertTriangle className="mt-0.5 shrink-0" size={18} />
-                <span>{error}</span>
-              </div>
-            ) : null}
-
-            <details className="supplier-totals"><summary>Totali per fornitore · {globalTotal}</summary><div className="bg-white p-4">
-              <h2 className="text-sm font-semibold uppercase tracking-normal text-slate-500">Totali per fornitore</h2>
-              <div className="mt-4 space-y-3">
-                {groups.length ? (
-                  groups.map((group) => (
-                    <div key={group.supplier} className="flex items-center justify-between border-b border-slate-100 pb-3 last:border-0 last:pb-0">
-                      <div>
-                        <p className="font-medium">{group.supplier}</p>
-                        <p className="text-xs text-slate-500">{group.count} fatture</p>
-                      </div>
-                      <p className="font-semibold">{currencyTotals(monthlyInvoices.filter((item) => item.invoice.supplier === group.supplier))}</p>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-sm text-slate-500">Nessuna fattura caricata.</p>
-                )}
-              </div>
-            </div>
-            </details>
-          </div>
-
-          <div className="min-w-0 rounded-lg border border-line bg-white shadow-panel">
-            <div className="flex flex-col gap-3 border-b border-line p-4 md:flex-row md:items-center md:justify-between">
-              <div>
-                <h2 className="text-lg font-semibold">Fatture gestite</h2>
-                <p className="text-sm text-slate-500">Modifica i campi incerti, controlla duplicati e approva.</p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-              <select aria-label="Mese cronologia" value={historyMonth} onChange={(event) => { setHistoryMonth(event.target.value); setReviewPage(0); }} className="h-10 rounded-md border border-line bg-white px-3 text-sm">
-                <option value="all">Tutti i mesi</option>
-                {months.map((month) => <option key={month} value={month}>{month === "undated" ? "Senza data" : new Intl.DateTimeFormat("it-IT", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${month}-01T12:00:00Z`))}</option>)}
-              </select>
-              <button type="button" onClick={verifyProcessing} disabled={trackingBusy || !ficStatus?.connected || !visibleInvoices.length} className="inline-flex h-10 items-center gap-2 rounded-md border border-line px-3 text-sm disabled:opacity-40"><CheckCircle2 size={16} />{trackingBusy ? "Verifica..." : "Verifica stati FIC"}</button>
-              <button type="button" title="Azzera solo i collegamenti delle fatture caricate; non cancella in FIC" onClick={resetProcessingList} disabled={!enrichedInvoices.some((item) => item.ficId || item.td17)} className="inline-flex h-10 items-center gap-2 rounded-md border border-line px-3 text-sm disabled:opacity-40"><RotateCcw size={16} /> Reset stati FIC</button>
-              <button
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-line px-3 text-sm font-medium text-slate-600 hover:bg-red-50 hover:text-red-700 disabled:opacity-40"
-                disabled={!monthlyInvoices.length || uploadState === "uploading"}
-                onClick={clearInvoices}
-                title="Rimuovi le fatture della vista dalla cronologia, senza cancellare da Drive o FIC"
-                type="button"
-              >
-                <Trash2 size={17} />
-                Rimuovi dalla cronologia
-              </button>
-              <button
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-mint px-4 text-sm font-semibold text-white disabled:bg-slate-300"
-                disabled={!monthlyInvoices.length}
-                onClick={approveAll}
-                type="button"
-              >
-                <CheckCircle2 size={17} />
-                Approva tutte
-              </button>
-              </div>
-            </div>
-
-            {trackingNotice && <p role="status" className="border-b border-line bg-emerald-50 px-4 py-2 text-sm text-emerald-800">{trackingNotice}</p>}
-            <div>
-              <table className="invoice-review w-full border-collapse text-left text-sm">
-                <thead className="bg-slate-50 text-xs uppercase tracking-normal text-slate-500">
-                  <tr>
-                    <th className="px-4 py-3">Fornitore</th>
-                    <th className="px-4 py-3">Numero</th>
-                    <th className="px-4 py-3">Data</th>
-                    <th className="px-4 py-3">Imponibile</th>
-                    <th className="px-4 py-3">IVA</th>
-                    <th className="px-4 py-3">Totale</th>
-                    <th className="px-4 py-3">Stato</th>
-                    <th className="px-4 py-3">Azioni</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {monthlyInvoices.length ? (
-                    visibleInvoices.map((item, index) => (
-                      <InvoiceRow
-                        key={item.id}
-                        invoice={item}
-                        isGroupStart={
-                          index === 0 || visibleInvoices[index - 1].invoice.supplier !== item.invoice.supplier
-                        }
-                        onApprove={approveInvoice}
-                        onRemove={removeInvoice}
-                        onReset={() => saveProcessing(item.invoice, {}, true)}
-                        onChange={updateInvoice}
-                        canCreate={canWrite && Boolean(companyId)}
-                        canTd17={canTd17}
-                        onTd17={setTd17Id}
-                        activeCompanyId={Number(companyId)}
-                        onCreate={setExpenseId}
-                      />
-                    ))
-                  ) : (
-                    <tr>
-                      <td className="px-4 py-12 text-center text-slate-500" colSpan={8}>
-                        Carica le fatture PDF per iniziare la revisione.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-              <nav aria-label="Paginazione revisione" className="flex flex-wrap items-center justify-between gap-2 border-t border-line p-3 text-sm"><span>{monthlyInvoices.length} fatture · Pagina {currentPage + 1} di {pageCount}</span><div className="flex items-center gap-2"><select aria-label="Fatture per pagina" value={reviewPageSize} onChange={(e) => { setReviewPageSize(Number(e.target.value)); setReviewPage(0); }} className="h-9 rounded-md border border-line bg-white px-2 text-xs">{[1, 2, 3].map((size) => <option key={size} value={size}>{size} per pagina</option>)}</select><button type="button" aria-label="Fatture precedenti" disabled={currentPage === 0} onClick={() => setReviewPage(currentPage - 1)} className="rounded-md border border-line p-2 disabled:opacity-40"><ChevronLeft size={16} /></button><button type="button" aria-label="Fatture successive" disabled={currentPage + 1 >= pageCount} onClick={() => setReviewPage(currentPage + 1)} className="rounded-md border border-line p-2 disabled:opacity-40"><ChevronRight size={16} /></button></div></nav>
-            </div>
-          </div>
-        </section>
-        </fieldset>
-        </div>
-        {td17Invoice && companyId && <Td17Dialog
-          key={`${td17Invoice.id}-${companyId}`}
-          invoice={td17Invoice.invoice}
-          companyId={Number(companyId)}
-          onClose={() => setTd17Id(null)}
-          onCreated={(result) => saveProcessing(td17Invoice.invoice, { td17Id: result.id, td17State: td17DeliveryState(result.eiStatus), td17EiStatus: result.eiStatus })}
-        />}
-        {expenseInvoice && companyId && <ExpenseDialog
-          key={`${expenseInvoice.id}-${companyId}`}
-          invoice={expenseInvoice.invoice}
-          companyId={Number(companyId)}
-          initialDraft={expenseInvoice.expenseDraft?.companyId === Number(companyId) ? expenseInvoice.expenseDraft : undefined}
-          onClose={() => setExpenseId(null)}
-          onPrepared={(expenseDraft) => setInvoices((current) => current.map((item) => item.id === expenseInvoice.id ? { ...item, expenseDraft } : item))}
-          onCreated={(ficId) => saveProcessing(expenseInvoice.invoice, { expenseId: ficId })}
-        />}
-      </div>
+      </footer><p className="manager-sdi"><CheckCheck size={13}/>Invio SDI: conferma finale in Fatture in Cloud</p>
     </main>
-  );
-}
-
-function FattureInCloudPanel({
-  busy,
-  status,
-  onDisconnect,
-  onRefresh,
-  companyId,
-  onCompanyChange,
-  canWrite,
-}: {
-  busy: boolean;
-  status: FicStatus | null;
-  onDisconnect: () => void;
-  onRefresh: () => void;
-  companyId: string;
-  onCompanyChange: (id: string) => void;
-  canWrite: boolean;
-}) {
-  const companies = status ? flattenCompanies(status.companies).filter((item) => item.id && item.type !== "accountant") : [];
-
-  return (
-    <section className="rounded-lg border border-line bg-white p-4 shadow-panel">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex items-start gap-3">
-          <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-slate-100 text-ink">
-            <Cloud size={20} />
-          </div>
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-base font-semibold">Fatture in Cloud</h2>
-              <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">
-                {canPrepareTd17(status?.scope) ? "Spese e TD17" : canWrite ? "Spese con conferma" : "Sola lettura"}
-              </span>
-              <FicConnectionBadge status={status} />
-            </div>
-            <p className="mt-1 text-sm text-slate-600">
-              {canPrepareTd17(status?.scope) ? "Invio SDI: conferma finale in FIC." : canWrite ? "Registrazione spese EUR disponibile. Autorizza TD17 per preparare le autofatture." : "Ricollega FIC per autorizzare la registrazione delle spese."}
-            </p>
-            {status?.config.configured === false ? (
-              <p className="mt-2 text-xs text-red-600">Mancano: {status.config.missing.join(", ")}</p>
-            ) : null}
-            {status?.error ? <p className="mt-2 text-xs text-red-600">{status.error}</p> : null}
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          {status?.connected && companies.length ? (
-            <select aria-label="Azienda Fatture in Cloud" value={companyId} onChange={(event) => onCompanyChange(event.target.value)} className="h-10 min-w-56 rounded-md border border-line bg-white px-3 text-sm">
-              {companies.map((company) => (
-                <option key={`${company.id}-${company.name}`} value={company.id ?? ""}>
-                  {company.name ?? `Azienda ${company.id ?? ""}`}
-                </option>
-              ))}
-            </select>
-          ) : null}
-          <div className="flex gap-2">
-            <a href="https://secure.fattureincloud.it/" target="_blank" rel="noopener noreferrer" title="Apri Fatture in Cloud" aria-label="Apri Fatture in Cloud" className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-line text-blue-700"><ExternalLink size={17} /></a>
-            {status?.connected && !canWrite && <a className="inline-flex h-10 items-center gap-2 rounded-md bg-ink px-3 text-sm text-white" href="/api/fatture-in-cloud/connect"><Link2 size={16} />Autorizza spese</a>}
-            {status?.connected && canWrite && !canPrepareTd17(status.scope) && <a className="inline-flex h-10 items-center gap-2 rounded-md bg-ink px-3 text-sm text-white" href="/api/fatture-in-cloud/connect"><Link2 size={16} />Autorizza TD17</a>}
-            <button
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-line px-3 text-sm font-medium hover:bg-slate-50"
-              onClick={onRefresh}
-              type="button"
-            >
-              <RotateCcw size={16} />
-              Aggiorna
-            </button>
-            {status?.connected ? (
-              <button
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-line px-3 text-sm font-medium hover:bg-slate-50 disabled:cursor-wait"
-                disabled={busy}
-                onClick={onDisconnect}
-                type="button"
-              >
-                <LogOut size={16} />
-                Scollega
-              </button>
-            ) : (
-              <a
-                className={`inline-flex h-10 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold ${
-                  status?.config.configured
-                    ? "bg-ink text-white"
-                    : "cursor-not-allowed bg-slate-200 text-slate-500"
-                }`}
-                href={status?.config.configured ? "/api/fatture-in-cloud/connect" : undefined}
-                aria-disabled={!status?.config.configured}
-              >
-                <Link2 size={16} />
-                Collega FIC
-              </a>
-            )}
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function FicConnectionBadge({ status }: { status: FicStatus | null }) {
-  if (!status) {
-    return (
-      <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-600">
-        Controllo...
-      </span>
-    );
-  }
-
-  if (status.connected) {
-    return (
-      <span className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">
-        Connesso
-      </span>
-    );
-  }
-
-  return (
-    <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-600">
-      Non collegato
-    </span>
-  );
-}
-
-function InvoiceRow({
-  invoice,
-  isGroupStart,
-  onApprove,
-  onRemove,
-  onReset,
-  onChange,
-  canCreate,
-  onCreate,
-  activeCompanyId,
-  canTd17,
-  onTd17,
-}: {
-  invoice: UiInvoice;
-  isGroupStart: boolean;
-  onApprove: (id: string) => void;
-  onRemove: (id: string) => void;
-  onReset: () => void;
-  onChange: (id: string, field: keyof InvoiceFields, rawValue: string) => void;
-  canCreate: boolean;
-  activeCompanyId: number;
-  onCreate: (id: string) => void;
-  canTd17: boolean;
-  onTd17: (id: string) => void;
-}) {
-  const duplicate = invoice.status === "duplicate";
-  const draft = invoice.expenseDraft?.companyId === activeCompanyId ? invoice.expenseDraft : undefined;
-  const locked = Boolean(invoice.ficId || invoice.td17);
-
-  return (
-    <>
-      {isGroupStart ? (
-        <tr className="border-t border-line bg-slate-100/70">
-          <td className="px-4 py-2 text-xs font-semibold uppercase tracking-normal text-slate-600" colSpan={8}>
-            {invoice.invoice.supplier}
-          </td>
-        </tr>
-      ) : null}
-      <tr className={duplicate ? "bg-amber-50" : "border-t border-slate-100"}>
-        <td className="px-4 py-3">
-          <select
-            disabled={locked}
-            className="h-9 w-36 rounded-md border border-line bg-white px-2"
-            value={invoice.invoice.supplier}
-            onChange={(event) => onChange(invoice.id, "supplier", event.target.value)}
-          >
-            {SUPPLIERS.map((supplier) => (
-              <option key={supplier}>{supplier}</option>
-            ))}
-          </select>
-        </td>
-        <td className="px-4 py-3">
-          <Editable
-            disabled={locked}
-            inputClassName="w-44 font-mono text-[13px]"
-            value={invoice.invoice.invoice_number}
-            onChange={(value) => onChange(invoice.id, "invoice_number", value)}
-          />
-        </td>
-        <td className="px-4 py-3">
-          <EditableDate disabled={locked} value={invoice.invoice.invoice_date} onChange={(value) => onChange(invoice.id, "invoice_date", value)} />
-        </td>
-        <td className="px-4 py-3">
-          <Editable disabled={locked} value={invoice.invoice.net_amount ?? ""} onChange={(value) => onChange(invoice.id, "net_amount", value)} />
-        </td>
-        <td className="px-4 py-3">
-          <Editable disabled={locked} value={invoice.invoice.tax_amount ?? ""} onChange={(value) => onChange(invoice.id, "tax_amount", value)} />
-        </td>
-        <td className="px-4 py-3">
-          <Editable disabled={locked} value={invoice.invoice.total_amount ?? ""} onChange={(value) => onChange(invoice.id, "total_amount", value)} />
-        </td>
-        <td className="px-4 py-3">
-          <StatusBadge status={invoice.status} />
-          {draft && !invoice.ficId && <p className="mt-2 text-xs text-amber-700">{draft.status === "needs_configuration" ? "Bozza: dati fiscali da confermare" : "Bozza pronta"}</p>}
-          {invoice.warnings.length ? <p className="mt-1 text-xs text-slate-500">{invoice.warnings[0].startsWith("Partita IVA") ? "Intestazione da verificare" : invoice.warnings[0]}</p> : null}
-        </td>
-        <td className="px-4 py-3">
-          {invoice.status !== "approved" && !locked && <button
-            className="inline-flex h-9 items-center gap-2 rounded-md border border-line px-3 text-sm font-medium hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
-            disabled={duplicate || locked}
-            onClick={() => onApprove(invoice.id)}
-            type="button"
-            title={duplicate ? "Risolvi il duplicato prima di approvare" : "Approva fattura"}
-          >
-            <Check size={16} />
-            Approva
-          </button>}
-          {invoice.ficId ? <FicReference label="Spesa" id={invoice.ficId} /> : <button type="button" disabled={!canCreate || invoice.status !== "approved" || invoice.invoice.currency !== "EUR"} onClick={() => onCreate(invoice.id)} className="fic-command"><Cloud size={16} />{draft ? "Rivedi bozza" : "Prepara spesa"}</button>}
-          {invoice.td17?.companyId === activeCompanyId ? <FicReference label="TD17" id={invoice.td17.id} deliveryState={invoice.td17.state ?? "not_sent"} eiStatus={invoice.td17.eiStatus} /> : <button type="button" disabled={!canTd17 || invoice.status !== "approved" || invoice.invoice.currency !== "EUR" || invoice.invoice.tax_amount !== 0} onClick={() => onTd17(invoice.id)} className="fic-command"><FileText size={16} />Prepara TD17</button>}
-          {(invoice.ficId || invoice.td17) && <button type="button" title="Reset riferimenti nella memoria del tool; non cancella documenti FIC" aria-label={`Reset FIC ${invoice.invoice.invoice_number}`} onClick={onReset} className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-line text-slate-500"><RotateCcw size={15} /></button>}
-        </td>
-      </tr>
-      <tr className={duplicate ? "bg-amber-50/70" : "border-b border-slate-100 bg-white"}>
-        <td className="px-4 pb-4 pt-0 text-xs text-slate-500" colSpan={8}>
-          <div className="flex flex-wrap items-center gap-4">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                aria-label={`Rimuovi fattura ${invoice.invoice.invoice_number || invoice.file_name}`}
-                title="Rimuovi dalla memoria del tool (Drive e FIC restano invariati)"
-                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-line text-slate-500 hover:border-red-300 hover:bg-red-50 hover:text-red-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
-                onClick={() => onRemove(invoice.id)}
-              >
-                <Trash2 size={16} />
-              </button>
-              <span className="font-medium text-slate-600">{invoice.file_name}</span>
-              {invoice.driveId && <a href={`https://drive.google.com/file/d/${encodeURIComponent(invoice.driveId)}/view`} target="_blank" rel="noopener noreferrer" title="Apri PDF su Drive" aria-label={`PDF su Drive ${invoice.invoice.invoice_number}`} className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-blue-200 text-blue-700"><ExternalLink size={15} /></a>}
-            </div>
-            <label className="flex items-center gap-2">
-              <span>Valuta</span>
-              <input
-                className="h-8 w-20 rounded-md border border-line px-2 uppercase"
-                disabled={locked}
-                maxLength={3}
-                value={invoice.invoice.currency}
-                onChange={(event) => onChange(invoice.id, "currency", event.target.value.toUpperCase())}
-              />
-            </label>
-            <label className="flex items-center gap-2">
-              <span>VAT fornitore</span>
-              <input
-                className="h-8 w-44 rounded-md border border-line px-2 uppercase"
-                disabled={locked}
-                value={invoice.invoice.supplier_vat}
-                onChange={(event) => onChange(invoice.id, "supplier_vat", event.target.value.toUpperCase())}
-              />
-            </label>
-            {invoice.invoice.supplier === "Anthropic" && <label className="flex items-center gap-2">
-              <span>Partita IVA cliente</span>
-              <input aria-label="Partita IVA cliente" title="Riporta solo la partita IVA presente nell'intestazione del PDF" className="h-8 w-44 rounded-md border border-line px-2 uppercase" disabled={locked} maxLength={20} value={invoice.invoice.customer_vat ?? ""} placeholder="Non rilevata" onChange={(event) => onChange(invoice.id, "customer_vat", event.target.value.toUpperCase())} />
-            </label>}
-            <span>Confidenza {Math.round(invoice.confidence * 100)}%</span>
-            {invoice.warnings.length ? <span>{invoice.warnings.join(" | ")}</span> : null}
-          </div>
-        </td>
-      </tr>
-    </>
-  );
-}
-
-function FicReference({ label, id, deliveryState, eiStatus }: { label: string; id: number; deliveryState?: Td17DeliveryState; eiStatus?: string }) {
-  const [copied, setCopied] = useState(false);
-  const deliveryLabel = deliveryState === "sent" ? "Inviato" : "Creato · non inviato";
-  return <button type="button" className="fic-reference" data-delivery={deliveryState} aria-label={`${label} FIC #${id}${deliveryState ? ` · ${deliveryLabel}` : ""}`} title={`Copia ID documento FIC${eiStatus ? ` · Stato FIC: ${eiStatus}` : ""}`} onClick={async () => {
-    try { await navigator.clipboard.writeText(String(id)); setCopied(true); }
-    catch { setCopied(false); }
-  }}>{deliveryState === "not_sent" ? <Clock3 size={17} /> : <CheckCircle2 size={17} />}<span><small>{label} FIC</small><strong>#{id}</strong>{deliveryState && <small className="mt-0.5">{deliveryLabel}</small>}</span>{copied ? <Check size={14} /> : <Copy size={14} />}</button>;
-}
-
-function Editable({
-  disabled = false,
-  inputClassName = "w-32",
-  value,
-  onChange,
-}: {
-  disabled?: boolean;
-  inputClassName?: string;
-  value: string | number;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="relative block">
-      <Pencil className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-      <input
-        className={`h-9 rounded-md border border-line pl-8 pr-2 ${inputClassName}`}
-        title={String(value)}
-        disabled={disabled}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      />
-    </label>
-  );
-}
-
-function EditableDate({ value, onChange, disabled = false }: { value: string; onChange: (value: string) => void; disabled?: boolean }) {
-  function commit(element: HTMLInputElement) {
-    const parsed = parseDisplayDate(element.value);
-    if (parsed || element.value.trim() === "") {
-      onChange(parsed);
-      return;
-    }
-
-    element.value = formatDateForDisplay(value);
-  }
-
-  return (
-    <input
-      key={value}
-      disabled={disabled}
-      className="h-9 w-32 rounded-md border border-line px-2"
-      defaultValue={formatDateForDisplay(value)}
-      inputMode="numeric"
-      onBlur={(event) => commit(event.currentTarget)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") event.currentTarget.blur();
-      }}
-      placeholder="gg/mm/aaaa"
-    />
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0 rounded-lg border border-line bg-white p-2.5 shadow-panel">
-      <p className="text-xs uppercase tracking-normal text-slate-500">{label}</p>
-      <p className="mt-1 text-lg font-semibold">{value}</p>
-    </div>
-  );
-}
-
-function StatusBadge({ status }: { status: InvoiceStatus }) {
-  const styles: Record<InvoiceStatus, string> = {
-    extracted: "bg-blue-50 text-blue-700 border-blue-200",
-    needs_review: "bg-amber-50 text-amber-700 border-amber-200",
-    duplicate: "bg-red-50 text-red-700 border-red-200",
-    approved: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  };
-
-  const labels: Record<InvoiceStatus, string> = {
-    extracted: "Estratta",
-    needs_review: "Da verificare",
-    duplicate: "Duplicato",
-    approved: "Approvata",
-  };
-
-  return (
-    <span className={`inline-flex rounded-md border px-2 py-1 text-xs font-semibold ${styles[status]}`}>
-      {labels[status]}
-    </span>
-  );
-}
-
-function flattenCompanies(companies: FicCompany[]): FicCompany[] {
-  return companies.flatMap((company) => [
-    company,
-    ...(company.controlled_companies ? flattenCompanies(company.controlled_companies) : []),
-  ]);
-}
-
-function groupInvoices(invoices: UiInvoice[]) {
-  const bySupplier = new Map<SupportedSupplier, { supplier: SupportedSupplier; count: number }>();
-  invoices.forEach((item) => {
-    const current = bySupplier.get(item.invoice.supplier) ?? {
-      supplier: item.invoice.supplier,
-      count: 0,
-    };
-    current.count += 1;
-    bySupplier.set(item.invoice.supplier, current);
-  });
-
-  return Array.from(bySupplier.values()).sort((a, b) => a.supplier.localeCompare(b.supplier));
-}
-
-function markDuplicates(invoices: UiInvoice[]) {
-  const seen = new Set<string>();
-  return [...invoices]
-    .sort((a, b) => a.invoice.supplier.localeCompare(b.invoice.supplier))
-    .map((item) => {
-      const key = item.invoice.supplier && item.invoice.invoice_number
-        ? `${item.invoice.supplier.toLowerCase()}::${item.invoice.invoice_number.toLowerCase()}`
-        : "";
-      const duplicate = Boolean(key && seen.has(key));
-      if (key) seen.add(key);
-      return duplicate
-        ? { ...item, status: "duplicate" as InvoiceStatus }
-        : item;
-    });
-}
-
-function parseEditableNumber(value: string) {
-  const normalized = value.includes(",") ? value.replace(/\./g, "").replace(",", ".") : value;
-  const parsed = normalized.trim() ? Number(normalized) : NaN;
-  return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : null;
-}
-
-function formatDateForDisplay(value: string) {
-  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  return match ? `${match[3]}/${match[2]}/${match[1]}` : value;
-}
-
-function parseDisplayDate(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-
-  const italian = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (italian) {
-    return [italian[3], italian[2].padStart(2, "0"), italian[1].padStart(2, "0")].join("-");
-  }
-
-  const iso = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-  if (iso) {
-    return [iso[1], iso[2].padStart(2, "0"), iso[3].padStart(2, "0")].join("-");
-  }
-
-  return "";
+    {selected && !operation && !drawer && <InvoiceDetail item={selected} error={error || memory.error} canWrite={canWrite} canTd17={canTd17} pending={memory.pending || Boolean(memory.error) || busy} onClose={() => setSelectedId(null)} onApprove={approveInvoice} onExpense={() => beginOperation("expense")} onTd17={() => beginOperation("td17")} onChange={updateInvoice} onRemove={removeInvoice} onReset={resetProcessing} onRefresh={() => void refreshMonth(invoiceMonth(selected))}/>}
+    {drawer === "acquire" && <AppDrawer wide title="Acquisisci fatture" onClose={() => setDrawer(null)} busy={acquiring || uploading} footer={<><span className="text-xs text-slate-500">{memory.pending ? "Salvataggio in corso..." : "Nessuna spesa o TD17 creati durante l'acquisizione."}</span><button className="sf-button" disabled={acquiring || uploading} onClick={() => setDrawer(null)}>Torna al registro</button></>}><AcquisitionPanel initialMonth={/^\d{4}-\d{2}$/.test(month) ? month : currentMonth()} invoices={invoices} enabled={memory.ready && !memory.error} onInvoice={acquire} onBusy={setAcquiring} onUpload={uploadFiles} uploading={uploading}/>{feedback}</AppDrawer>}
+    {drawer === "settings" && <AppDrawer title="Impostazioni azienda" onClose={() => setDrawer(null)} busy={busy}><section className="settings-section"><h3>Azienda Fatture in Cloud</h3><select aria-label="Azienda Fatture in Cloud" value={companyId} disabled={memory.pending || locked} onChange={(e) => { setCompanyId(e.target.value); setSelectedId(null); setUpdated(""); setPage(0); }}>{!companies.length && <option value="">Nessuna azienda collegata</option>}{companies.map((item) => <option key={item.id} value={String(item.id)}>{item.name}</option>)}</select></section><section className="settings-section"><h3>Fatture in Cloud</h3><p>{fic?.connected ? "Collegato" : "Non collegato"}</p>{fic?.config.configured === false && <p className="text-sm text-red-700">Configurazione da completare: {fic.config.missing.join(", ")}</p>}<div className="settings-actions">{(!fic?.connected || !canWriteExpenses(fic.scope) || !canPrepareTd17(fic.scope)) && <a href="/api/fatture-in-cloud/connect" className="sf-button sf-primary"><Link2 size={16}/>{fic?.connected ? "Autorizza spese e TD17" : "Collega FIC"}</a>}<button className="sf-button" disabled={busy} onClick={() => void refreshConnections()}><RotateCcw size={15}/>Aggiorna</button>{fic?.connected && <button className="sf-text-button" disabled={memory.pending || busy} onClick={() => void disconnect("fic")}>Scollega</button>}</div></section><section className="settings-section"><h3>Gmail e Drive</h3><p>{googleConnected ? "Collegati · Etichetta Fatture SaaS" : "Non collegati"}</p><div className="settings-actions"><a href="/api/google/connect" className="sf-button"><Link2 size={16}/>{googleConnected ? "Ricollega Google" : "Collega Google"}</a>{googleConnected && <button className="sf-text-button" disabled={memory.pending || busy} onClick={() => void disconnect("google")}>Scollega</button>}</div></section><dl className="settings-defaults"><dt>Centro di costo</dt><dd>WEB</dd><dt>Invio SDI</dt><dd>Manuale in FIC</dd></dl>{memory.error && <button className="sf-button" onClick={memory.refresh}>Ricarica fatture salvate</button>}{feedback}</AppDrawer>}
+    {operation?.type === "expense" && <ExpenseDialog key={`${operation.id}-${operation.companyId}`} invoice={operation.invoice} companyId={operation.companyId} initialDraft={operation.draft?.companyId === operation.companyId ? operation.draft : undefined} onClose={() => setOperation(null)} onPrepared={(expenseDraft) => setInvoices((current) => current.map((item) => item.id === operation.id ? { ...item, expenseDraft } : item))} onCreated={(expenseId) => saveProcessing(operation.invoice, { expenseId })}/>}
+    {operation?.type === "td17" && <Td17Dialog key={`${operation.id}-${operation.companyId}`} invoice={operation.invoice} companyId={operation.companyId} onClose={() => setOperation(null)} onCreated={(result) => saveProcessing(operation.invoice, { td17Id: result.id, td17State: td17DeliveryState(result.eiStatus), td17EiStatus: result.eiStatus })}/>}
+  </div>;
 }

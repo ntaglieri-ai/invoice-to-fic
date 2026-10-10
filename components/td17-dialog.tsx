@@ -34,6 +34,8 @@ export function Td17Dialog({ invoice, companyId, onClose, onCreated }: {
 
   useEffect(() => {
     dialog.current?.showModal();
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     let cancelled = false;
     requestTd17({ action: "settings", companyId }).then((data: { suppliers: FicSupplier[]; vatTypes: Td17Vat[]; paymentMethod: string; warning?: string }) => {
       if (cancelled) return;
@@ -43,7 +45,7 @@ export function Td17Dialog({ invoice, companyId, onClose, onCreated }: {
       const matches = data.vatTypes.filter((vat) => vat.value === 22);
       setOptions((current) => ({ ...current, supplierId: matchExpenseSupplier(data.suppliers, invoice.supplier_vat)?.id ?? 0, vatId: matches.length === 1 ? matches[0].id : -1, paymentMethod: data.paymentMethod }));
     }).catch((error) => { if (!cancelled) setError(error.message); }).finally(() => { if (!cancelled) setBusy(false); });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; document.body.style.overflow = previousOverflow; };
   }, [companyId, invoice]);
 
   function complete(data: Td17Result) { setResult(data); onCreated(data); }
@@ -65,7 +67,7 @@ export function Td17Dialog({ invoice, companyId, onClose, onCreated }: {
   }
 
   const input = "mt-1 h-10 w-full min-w-0 rounded-md border border-line bg-white px-3 text-sm";
-  return <dialog ref={dialog} aria-labelledby="td17-title" className="m-auto max-h-[90dvh] w-[min(680px,calc(100%-32px))] overflow-y-auto rounded-lg border border-line p-0 text-ink shadow-xl backdrop:bg-black/40" onCancel={(event) => { event.preventDefault(); if (!busy) onClose(); }}>
+  return <dialog ref={dialog} aria-labelledby="td17-title" className="app-drawer operation-drawer" onCancel={(event) => { event.preventDefault(); if (!busy) onClose(); }}>
     <header className="flex items-center justify-between gap-3 border-b border-line p-5">
       <h2 id="td17-title" className="text-lg font-semibold">{result ? "TD17 in Fatture in Cloud" : preview ? "Conferma TD17 non inviato" : "Prepara TD17"}</h2>
       <button aria-label="Chiudi" title="Chiudi" disabled={busy} onClick={onClose} className="flex size-9 shrink-0 items-center justify-center rounded-md hover:bg-slate-100 disabled:opacity-40"><X size={20} /></button>

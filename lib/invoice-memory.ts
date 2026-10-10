@@ -17,6 +17,7 @@ export function cleanManagedInvoice(value: unknown): ManagedInvoice {
   if (!value || typeof value !== "object") throw new Error("Dati fattura non validi.");
   const item = value as ManagedInvoice;
   const invoice = item.invoice;
+  if (item.checked_at !== undefined && (!text(item.checked_at, 40) || !Number.isFinite(Date.parse(item.checked_at)))) throw new Error("Data controllo non valida.");
   if (!recordId(item.id) || !text(item.file_name, 200) || !Number.isSafeInteger(item.index) || item.index < 0 ||
     !invoice || !suppliers.includes(invoice.supplier) || !text(invoice.invoice_number, 200) || !text(invoice.invoice_date, 20) ||
     !text(invoice.currency, 10) || !text(invoice.supplier_vat, 100) || (invoice.customer_vat !== undefined && !text(invoice.customer_vat, 100)) ||
@@ -36,7 +37,7 @@ export function cleanManagedInvoice(value: unknown): ManagedInvoice {
       ...(record.td17Id ? { td17Id: record.td17Id, td17State: td17DeliveryState(record.td17EiStatus), ...(record.td17EiStatus !== undefined ? { td17EiStatus: record.td17EiStatus } : {}) } : {}) };
   }
   return { id: item.id, index: item.index, file_name: item.file_name, invoice: fields, status: item.status, confidence: item.confidence,
-    warnings: item.warnings, extracted_text_preview: "", ...(item.driveId ? { driveId: item.driveId } : {}), ...(processing ? { processing } : {}) };
+    warnings: item.warnings, extracted_text_preview: "", ...(item.checked_at ? { checked_at: item.checked_at } : {}), ...(item.driveId ? { driveId: item.driveId } : {}), ...(processing ? { processing } : {}) };
 }
 
 export function cleanMemoryEvent(raw: unknown): MemoryEvent {

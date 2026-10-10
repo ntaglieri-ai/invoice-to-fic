@@ -41,15 +41,20 @@ export async function scanGoogleInvoices(session: GoogleSession, month: string, 
 
 async function attachArchiveStatus(session: GoogleSession, items: MailCandidate[]) {
   const sources = new Map<string, { item: MailCandidate; partId: string }>();
+  const invoiceSources = new Map<string, { item: MailCandidate; partId: string }[]>();
   for (const item of items) {
     for (const partId of item.invoices.length ? item.invoices.map((file) => file.partId) : item.linkAvailable ? ["openai-link"] : []) {
       sources.set(hash(`${item.id}:${partId}`), { item, partId });
+      if (item.supplier === "OpenAI" && item.invoiceNumber && partId === "openai-link") {
+        const key = hash(`OpenAI:${item.invoiceNumber}`);
+        invoiceSources.set(key, [...(invoiceSources.get(key) ?? []), { item, partId }]);
+      }
     }
   }
   const matches: { item: MailCandidate; partId: string; file: DriveFile }[] = [];
-  const keys = [...sources.keys()];
+  const keys = [...sources.keys()].map((key) => ({ key, property: "ficSource" })).concat([...invoiceSources.keys()].map((key) => ({ key, property: "ficInvoice" })));
   for (let offset = 0; offset < keys.length; offset += 20) {
-    const clauses = keys.slice(offset, offset + 20).map((key) => `appProperties has { key='ficSource' and value='${key}' }`);
+    const clauses = keys.slice(offset, offset + 20).map(({ key, property }) => `appProperties has { key='${property}' and value='${key}' }`);
     let pageToken = "";
     for (let page = 0; page < 20; page++) {
       const params = new URLSearchParams({ q: `trashed = false and mimeType = 'application/pdf' and (${clauses.join(" or ")})`, fields: "files(id,name,appProperties),nextPageToken,incompleteSearch", pageSize: "100", ...(pageToken ? { pageToken } : {}) });
@@ -58,6 +63,7 @@ async function attachArchiveStatus(session: GoogleSession, items: MailCandidate[
       for (const file of data.files) {
         const source = sources.get(file.appProperties?.ficSource ?? "");
         if (source) matches.push({ ...source, file });
+        for (const invoiceSource of invoiceSources.get(file.appProperties?.ficInvoice ?? "") ?? []) matches.push({ ...invoiceSource, file });
       }
       pageToken = data.nextPageToken ?? "";
       if (!pageToken) break;
@@ -67,7 +73,7 @@ async function attachArchiveStatus(session: GoogleSession, items: MailCandidate[
   // Publish results only after every page is checked; failures must not look like an empty archive.
   for (const item of items) item.archives = {};
   for (const { item, partId, file } of matches) {
-    item.archives![partId] = { driveId: file.id, invoiceDate: file.appProperties?.ficDate };
+    item.archives![partId] = { driveId: file.id, invoiceDate: file.appProperties?.ficDate, ...(file.name ? { name: file.name } : {}) };
   }
 }
 
