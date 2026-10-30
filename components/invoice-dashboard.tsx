@@ -23,6 +23,7 @@ import type { InvoiceFields, InvoiceStatus, ParsedInvoice } from "@/lib/types";
 import { reconcileFicProcessing, type ProcessingVerification } from "@/lib/fic-sync";
 import { CurrencyConversionDialog } from "@/components/currency-conversion-dialog";
 import type { EurConversion } from "@/lib/types";
+import { repairMissingSupabaseTaxId } from "@/lib/supplier-tax-repair";
 
 type UiInvoice = WorkflowInvoice & { expenseDraft?: PreparedExpense };
 type FicCompany = { id: number | null; name: string | null; type: string | null; vat_number?: string | null; controlled_companies?: FicCompany[] | null };
@@ -194,7 +195,11 @@ export function InvoiceDashboard() {
   function acquire(result: ArchivedInvoice) {
     setInvoices((current) => {
       const existing = current.find((item) => item.driveId === result.driveId || (result.invoice.invoice.invoice_number && processingKey(companyId, item.invoice) === processingKey(companyId, result.invoice.invoice)));
-      if (existing) return existing.driveId ? current : current.map((item) => item.id === existing.id ? { ...item, driveId: result.driveId } : item);
+      if (existing) {
+        const repaired = repairMissingSupabaseTaxId(existing, result.invoice);
+        if (repaired === existing && existing.driveId) return current;
+        return current.map((item) => item.id === existing.id ? { ...repaired, driveId: result.driveId, ...(repaired !== existing ? { expenseDraft: undefined } : {}) } : item);
+      }
       return [...current, { ...result.invoice, driveId: result.driveId, id: `drive-${result.driveId}` }];
     });
     const importedMonth = invoiceMonth({ ...result.invoice, id: result.driveId });
@@ -215,6 +220,10 @@ export function InvoiceDashboard() {
         for (const item of data.invoices as ParsedInvoice[]) {
           const existing = item.invoice.invoice_number && next.find((known) => processingKey(companyId, known.invoice) === processingKey(companyId, item.invoice));
           if (!existing) next.push({ ...item, id: `${item.file_name}-${crypto.randomUUID()}` });
+          else {
+            const repaired = repairMissingSupabaseTaxId(existing, item);
+            if (repaired !== existing) next[next.indexOf(existing)] = { ...repaired, expenseDraft: undefined };
+          }
         }
         return next;
       });

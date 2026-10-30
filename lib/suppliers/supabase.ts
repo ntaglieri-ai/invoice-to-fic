@@ -16,17 +16,19 @@ export const supabaseParser: SupplierParser = {
         /Invoice\s+date\s*[:#]?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i,
         /Date\s*[:#]?\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})/i,
       ]),
+      supplier_vat: firstMatch(text, [
+        /Singapore\s+GST\s+(?:No\.?|Number)\s*[:#]?\s*((?:SG)?\d{9}[A-Z])\b/i,
+      ]),
       net_amount: firstAmount(text, [
         /Subtotal\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
         /Net\s+amount\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
       ]),
       tax_amount: firstAmount(text, [
-        /Tax\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
-        /VAT\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
+        /^\s*(?:Tax|VAT|GST)(?:\s*\([\d.,]+\s*%\))?\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/im,
       ]),
       total_amount: firstAmount(text, [
-        /Total\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
-        /Amount\s+paid\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/i,
+        /^\s*Total(?:\s+due)?\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/im,
+        /^\s*Amount\s+(?:due|paid)\s*[:#]?\s*((?:€|\$|£|EUR|USD|GBP)?\s?-?[\d,.]+)/im,
       ]),
     });
   },
