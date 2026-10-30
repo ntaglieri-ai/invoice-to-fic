@@ -24,7 +24,7 @@ import { reconcileFicProcessing, type ProcessingVerification } from "@/lib/fic-s
 import { CurrencyConversionDialog } from "@/components/currency-conversion-dialog";
 import type { EurConversion } from "@/lib/types";
 import { repairMissingSupabaseTaxId } from "@/lib/supplier-tax-repair";
-import { repairUndatedVercel } from "@/lib/vercel-register-repair";
+import { repairUndatedVercel, recoverVercelDriveInvoice } from "@/lib/vercel-register-repair";
 
 type UiInvoice = WorkflowInvoice & { expenseDraft?: PreparedExpense };
 type FicCompany = { id: number | null; name: string | null; type: string | null; vat_number?: string | null; controlled_companies?: FicCompany[] | null };
@@ -66,8 +66,10 @@ export function InvoiceDashboard() {
   const [notice, setNotice] = useState("");
   const [updated, setUpdated] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [vercelRecoveryCount, setVercelRecoveryCount] = useState(0);
   const syncedRef = useRef(new Set<string>());
   const reparsedVercelRef = useRef(new Set<string>());
+  const recoveredVercelScopesRef = useRef(new Set<string>());
   const lastReturnSyncRef = useRef(0);
   const companyRef = useRef(companyId);
   useEffect(() => { companyRef.current = companyId; }, [companyId]);
@@ -104,19 +106,52 @@ export function InvoiceDashboard() {
 
   const reparseVercel = useEffectEvent(async () => {
     if (!memory.ready || memory.pending || memory.error || !googleConnected || locked || syncing) return;
+    const scopes = [...(/^\d{4}-\d{2}$/.test(month) ? [month] : []), "undated"].filter((scope) => !recoveredVercelScopesRef.current.has(`${companyId}:${scope}`));
+    scopes.forEach((scope) => recoveredVercelScopesRef.current.add(`${companyId}:${scope}`));
     const candidates = invoices.filter((item) => item.invoice.supplier === "Vercel" && !item.invoice.invoice_date && item.driveId && !ledger[processingKey(companyId, item.invoice)]?.expenseId && !ledger[processingKey(companyId, item.invoice)]?.td17Id && !reparsedVercelRef.current.has(`${companyId}:${item.id}`));
-    for (const item of candidates) {
-      if (companyRef.current !== companyId) return;
-      if (reparsedVercelRef.current.has(`${companyId}:${item.id}`)) continue;
-      reparsedVercelRef.current.add(`${companyId}:${item.id}`);
-      try {
-        const result: ArchivedInvoice = await post("/api/google/invoices", { action: "drive-load", fileId: item.driveId });
+    if (!scopes.length && !candidates.length) return;
+    setVercelRecoveryCount((count) => count + 1);
+    try {
+      for (const item of candidates) {
         if (companyRef.current !== companyId) return;
-        setInvoices((current) => JSON.stringify(current.find((row) => row.id === item.id)?.invoice) === JSON.stringify(item.invoice) ? repairUndatedVercel(current, item.id, item.driveId!, result.invoice, companyId) : current);
-      } catch (e) { if (companyRef.current === companyId) setError(e instanceof Error ? e.message : "Rilettura delle fatture Vercel non riuscita. Dati conservati."); }
-    }
+        if (reparsedVercelRef.current.has(`${companyId}:${item.id}`)) continue;
+        reparsedVercelRef.current.add(`${companyId}:${item.id}`);
+        try {
+          const result: ArchivedInvoice = await post("/api/google/invoices", { action: "drive-load", fileId: item.driveId });
+          if (companyRef.current !== companyId) return;
+          setInvoices((current) => JSON.stringify(current.find((row) => row.id === item.id)?.invoice) === JSON.stringify(item.invoice) ? repairUndatedVercel(current, item.id, item.driveId!, result.invoice, companyId) : current);
+        } catch (e) { if (companyRef.current === companyId) setError(e instanceof Error ? e.message : "Rilettura delle fatture Vercel non riuscita. Dati conservati."); }
+      }
+      for (const scope of scopes) {
+        let pageToken: string | null = null;
+        const cursors = new Set<string>();
+        try {
+          do {
+            if (companyRef.current !== companyId) return;
+            const result: { files: { id: string }[]; nextPageToken: string | null } = await post("/api/google/invoices", { action: scope === "undated" ? "drive-review-list" : "drive-list", month: scope, supplier: "Vercel", ...(pageToken ? { pageToken } : {}) });
+            for (const file of result.files) {
+              const key = `${companyId}:file:${file.id}`;
+              if (invoices.some((item) => item.driveId === file.id) || reparsedVercelRef.current.has(key)) continue;
+              if (companyRef.current !== companyId) return;
+              reparsedVercelRef.current.add(key);
+              try {
+                const recovered: ArchivedInvoice = await post("/api/google/invoices", { action: "drive-load", fileId: file.id });
+                if (companyRef.current !== companyId) return;
+                setInvoices((current) => recoverVercelDriveInvoice(current, file.id, recovered.invoice, companyId));
+              } catch (e) { if (companyRef.current === companyId) setError(e instanceof Error ? e.message : "Recupero Vercel da Drive non riuscito. PDF conservati."); }
+            }
+            pageToken = result.nextPageToken;
+            if (pageToken && cursors.has(pageToken)) throw new Error("Paginazione archivio Vercel non valida. Ricarica la pagina.");
+            if (pageToken) cursors.add(pageToken);
+          } while (pageToken);
+        } catch (e) { if (companyRef.current === companyId) setError(e instanceof Error ? e.message : "Ricerca Vercel su Drive non riuscita. Dati conservati."); }
+      }
+    } finally { setVercelRecoveryCount((count) => Math.max(0, count - 1)); }
   });
-  useEffect(() => { void reparseVercel(); }, [memory.ready, memory.pending, memory.error, googleConnected, locked, syncing, invoices, ledger, companyId]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void reparseVercel(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [memory.ready, memory.pending, memory.error, googleConnected, locked, syncing, invoices, ledger, companyId, month]);
 
   async function refreshConnections() {
     const googleStatus = fetch("/api/google/invoices", { cache: "no-store" }).then(async (response) => {
@@ -316,7 +351,7 @@ export function InvoiceDashboard() {
   return <div className="manager-shell">
     <aside className="manager-sidebar"><div className="manager-brand"><span><Layers size={22}/></span><strong>MosTag</strong></div><div className="manager-company"><strong>{company?.name || "La tua azienda"}</strong><small>Gestione aziendale</small></div><nav aria-label="Navigazione gestionale"><small>ACQUISTI</small><button className="manager-nav active" onClick={() => { if (!locked) { setDrawer(null); setSelectedId(null); } }}><Files size={18}/>Fatture estere</button><button className="manager-nav" disabled={locked} onClick={() => { setSelectedId(null); setDrawer("settings"); }}><Settings2 size={18}/>Impostazioni</button></nav><div className="sidebar-connections"><span><i className={fic?.connected ? "online-dot" : "offline-dot"}/>Fatture in Cloud</span><span><i className={googleConnected ? "online-dot" : "offline-dot"}/>Gmail e Drive</span></div></aside>
     <main className="manager-main"><header className="manager-header"><div><p>Acquisti / Fatture estere</p><h1>Fatture estere</h1></div><div className="manager-actions"><div className="month-switch"><button className="sf-icon" aria-label="Mese precedente" title="Mese precedente" disabled={locked || month === "all" || month === "undated"} onClick={() => shiftMonth(-1)}><ChevronLeft size={17}/></button><select aria-label="Mese cronologia" value={month} disabled={locked} onChange={(e) => changeMonth(e.target.value)}><option value="all">Tutti i mesi</option>{months.map((value) => <option key={value} value={value}>{monthLabel(value)}</option>)}</select><button className="sf-icon" aria-label="Mese successivo" title="Mese successivo" disabled={locked || month === "all" || month === "undated"} onClick={() => shiftMonth(1)}><ChevronRight size={17}/></button></div><button className="sf-button sf-primary" disabled={locked} onClick={() => { setSelectedId(null); setDrawer("acquire"); }}><Plus size={17}/>Acquisisci fatture</button></div></header>
-      <section className="manager-overview"><div className="manager-metrics"><div><strong>{monthly.length}</strong><small>Fatture del mese</small></div><div><strong>{currencyTotals(monthly)}</strong><small>Totale acquisti</small></div><div className="metric-aqua"><strong>{monthly.filter((item) => workflowStage(item) === "done").length} / {monthly.length}</strong><small>Completate</small></div></div><div className="manager-sync"><span>{syncing ? "Aggiornamento FIC..." : updated ? `FIC aggiornato alle ${updated}` : "FIC da aggiornare"}<small className={memory.error ? "sync-error" : memory.pending ? "sync-pending" : ""}>{memory.error ? "Salvataggio non riuscito" : memory.pending ? "Salvataggio in corso..." : memory.ready ? "Salvato online" : "Collega Google e FIC"}</small></span><button className="sf-icon" title="Aggiorna da Fatture in Cloud" aria-label="Aggiorna da FIC" disabled={!memory.ready || memory.pending || locked || syncing} onClick={() => void refreshMonth()}><RotateCcw size={17} className={syncing ? "animate-spin" : ""}/></button><form action="/api/auth/logout" method="post" onSubmit={(e) => { if (memory.pending || locked || syncing) { e.preventDefault(); setError("Completa le operazioni e il salvataggio prima di uscire."); } }}><button className="sf-icon" title="Esci" aria-label="Esci"><LogOut size={17}/></button></form></div></section>
+      <section className="manager-overview"><div className="manager-metrics"><div><strong>{monthly.length}</strong><small>Fatture del mese</small></div><div><strong>{currencyTotals(monthly)}</strong><small>Totale acquisti</small></div><div className="metric-aqua"><strong>{monthly.filter((item) => workflowStage(item) === "done").length} / {monthly.length}</strong><small>Completate</small></div></div><div className="manager-sync"><span>{syncing ? "Aggiornamento FIC..." : updated ? `FIC aggiornato alle ${updated}` : "FIC da aggiornare"}<small className={memory.error ? "sync-error" : memory.pending || vercelRecoveryCount > 0 ? "sync-pending" : ""}>{memory.error ? "Salvataggio non riuscito" : memory.pending ? "Salvataggio in corso..." : vercelRecoveryCount > 0 ? "Recupero Vercel da Drive..." : memory.ready ? "Salvato online" : "Collega Google e FIC"}</small></span><button className="sf-icon" title="Aggiorna da Fatture in Cloud" aria-label="Aggiorna da FIC" disabled={!memory.ready || memory.pending || locked || syncing} onClick={() => void refreshMonth()}><RotateCcw size={17} className={syncing ? "animate-spin" : ""}/></button><form action="/api/auth/logout" method="post" onSubmit={(e) => { if (memory.pending || locked || syncing) { e.preventDefault(); setError("Completa le operazioni e il salvataggio prima di uscire."); } }}><button className="sf-icon" title="Esci" aria-label="Esci"><LogOut size={17}/></button></form></div></section>
       {feedback}
       {!memory.ready && !memory.error && <p className="sf-notice">{fic?.connected && googleConnected ? "Caricamento delle fatture gestite..." : "Collega Google e FIC nelle impostazioni per iniziare."}<button className="sf-text-button" onClick={() => setDrawer("settings")}>Impostazioni</button></p>}
       {memory.ready && <p className="sf-notice">{memory.accountEmail ? `Memoria: ${memory.accountEmail}` : "Memoria online collegata"}<button className="sf-text-button" disabled={locked || memory.pending || syncing} onClick={memory.refresh}><RotateCcw size={13}/>Ricarica fatture salvate</button></p>}

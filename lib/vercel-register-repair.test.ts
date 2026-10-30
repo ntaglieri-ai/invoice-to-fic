@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { repairUndatedVercel } from "./vercel-register-repair";
+import { repairUndatedVercel, recoverVercelDriveInvoice } from "./vercel-register-repair";
 import { invoiceMonth } from "./invoice-history";
 import { parseInvoiceText } from "./invoice-parser";
 import type { WorkflowInvoice } from "./invoice-workflow";
@@ -46,4 +46,16 @@ it("joins a recovered FIC row without duplicates or changing its currency, amoun
   const peer = { ...parsed, id: "fic-123", ficId: 123, td17: { companyId: 1, id: 456 }, invoice: { ...parsed.invoice, currency: "EUR", net_amount: 27, tax_amount: 5.94, total_amount: 32.94 } };
   const result = repairUndatedVercel([old, peer], old.id, "pdf", parsed, "1");
   expect(result).toEqual([{ ...peer, driveId: "pdf" }]);
+});
+it("recovers separately archived invoice numbers that the old truncated prefix had collapsed", () => {
+  const other = { ...parsed, invoice: { ...parsed.invoice, invoice_number: "7R20H5XD-0092" } };
+  const rows = recoverVercelDriveInvoice(repairUndatedVercel([old], old.id, "pdf", parsed, "1"), "second-pdf", other, "1");
+  expect(rows.map((item) => item.invoice.invoice_number)).toEqual(["7R20H5XD-0091", "7R20H5XD-0092"]);
+  expect(rows[1].id).toBe("drive-second-pdf");
+  expect(invoiceMonth(rows[1])).toBe("2026-10");
+  expect(recoverVercelDriveInvoice(rows, "second-pdf", other, "1")).toBe(rows);
+});
+it("only attaches a source PDF to an already registered FIC invoice", () => {
+  const peer = { ...parsed, id: "fic", ficId: 123, td17: { companyId: 1, id: 456 } };
+  expect(recoverVercelDriveInvoice([peer], "pdf", parsed, "1")).toEqual([{ ...peer, driveId: "pdf" }]);
 });

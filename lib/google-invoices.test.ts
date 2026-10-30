@@ -5,7 +5,7 @@ vi.mock("@/lib/invoice-link-download", () => ({ MAX_PDF_BYTES: 10 * 1024 * 1024,
 vi.mock("@/lib/invoice-parser", () => ({ parseInvoicePdf: vi.fn() }));
 import { googleFetch } from "./google-session";
 import { parseInvoicePdf } from "./invoice-parser";
-import { importGoogleInvoice, scanGoogleInvoices, listDriveInvoices, loadDriveInvoice } from "./google-invoices";
+import { importGoogleInvoice, scanGoogleInvoices, listDriveInvoices, listUndatedDriveInvoices, loadDriveInvoice } from "./google-invoices";
 import type { MailMessage } from "./mail-invoices";
 
 const session = { access: "a", refresh: "r", scope: "", expires: 0 };
@@ -52,6 +52,29 @@ it("lists archived PDFs by invoice month and supplier with pagination, without w
   });
   expect(await listDriveInvoices(session, "2026-09", "OpenAI", "next")).toEqual({ files: [{ id: "saved", name: "invoice.pdf", invoiceDate: "2026-09-18" }], nextPageToken: "more" });
   expect(vi.mocked(googleFetch).mock.calls.every((call) => !call[2]?.method)).toBe(true);
+});
+it("finds managed Vercel PDFs in the old undated archive, with pagination and no writes", async () => {
+  let folder = 0;
+  vi.mocked(googleFetch).mockImplementation(async (_session, path, init) => {
+    expect(init?.method).toBeUndefined();
+    const params = new URLSearchParams(path.split("?")[1]);
+    const q = params.get("q")!;
+    if (q.includes("ficFolder")) return Response.json({ files: [{ id: `folder-${++folder}`, name: "folder" }] });
+    expect(folder).toBe(3);
+    expect(q).toContain("'folder-3' in parents");
+    expect(params.get("pageToken")).toBe("next");
+    return Response.json({ files: [{ id: "saved", name: "Invoice.pdf", appProperties: { ficSource: "source" } }, { id: "unmanaged", name: "Other.pdf" }], nextPageToken: "more" });
+  });
+  expect(await listUndatedDriveInvoices(session, "Vercel", "next")).toEqual({ files: [{ id: "saved", name: "Invoice.pdf", invoiceDate: undefined }], nextPageToken: "more" });
+});
+it("returns an empty old archive without creating missing folders", async () => {
+  expect(await listUndatedDriveInvoices(session, "Vercel")).toEqual({ files: [], nextPageToken: null });
+  expect(googleFetch).toHaveBeenCalledTimes(1);
+});
+it("rejects invalid undated archive supplier filters before accessing Drive", async () => {
+  await expect(listUndatedDriveInvoices(session, "Other")).rejects.toThrow("Fornitore non valido");
+  await expect(listUndatedDriveInvoices(session, "")).rejects.toThrow("Seleziona un fornitore");
+  expect(googleFetch).not.toHaveBeenCalled();
 });
 it("rejects non-archived Drive files before downloading", async () => {
   vi.mocked(googleFetch).mockResolvedValue(Response.json({ id: "other", name: "other.pdf", mimeType: "application/pdf", appProperties: {} }));

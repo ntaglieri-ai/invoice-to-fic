@@ -11,3 +11,10 @@ export function repairUndatedVercel<T extends WorkflowInvoice>(items: T[], id: s
   if (peer) return items.filter((item) => item.id !== id).map((item) => item.id === peer.id ? { ...item, driveId: item.driveId || driveId } : item);
   return items.map((item) => item.id === id ? { ...item, ...parsed, id: item.id, driveId, checked_at: undefined } : item);
 }
+
+export function recoverVercelDriveInvoice(items: WorkflowInvoice[], driveId: string, parsed: ParsedInvoice, companyId: string): WorkflowInvoice[] {
+  if (parsed.invoice.supplier !== "Vercel" || !/^\d{4}-\d{2}-\d{2}$/.test(parsed.invoice.invoice_date) || !parsed.invoice.invoice_number || items.some((item) => item.driveId === driveId)) return items;
+  const peer = items.find((item) => processingKey(companyId, item.invoice) === processingKey(companyId, parsed.invoice));
+  if (peer) return peer.driveId ? items : items.map((item) => item.id === peer.id ? { ...item, driveId } : item);
+  return [...items, { ...parsed, id: `drive-${driveId}`, driveId }];
+}

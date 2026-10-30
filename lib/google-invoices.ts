@@ -97,6 +97,25 @@ async function folder(session: GoogleSession, name: string, parent?: string) {
 export type ArchivedInvoice = { invoice: ParsedInvoice; driveId: string; duplicate: boolean };
 export type DriveInvoiceFile = { id: string; name: string; invoiceDate?: string };
 
+export async function listUndatedDriveInvoices(session: GoogleSession, supplier: unknown, pageToken = "") {
+  supplierQuery(supplier);
+  if (typeof supplier !== "string" || !supplier) throw new Error("Seleziona un fornitore.");
+  let parent: string | undefined;
+  for (const name of ["Fatture SaaS", "Da verificare", supplier]) {
+    const found = await findFile(session, "ficFolder", hash(`${parent ?? "root"}/${name}`));
+    if (!found) return { files: [], nextPageToken: null };
+    parent = found.id;
+  }
+  const query = new URLSearchParams({
+    q: `trashed = false and mimeType = 'application/pdf' and '${escapeQuery(parent!)}' in parents`,
+    fields: "files(id,name,appProperties),nextPageToken,incompleteSearch", pageSize: "10", orderBy: "createdTime desc",
+    ...(pageToken ? { pageToken } : {}),
+  });
+  const data = await json<{ files: DriveFile[]; nextPageToken?: string; incompleteSearch?: boolean }>(session, `/drive/v3/files?${query}`);
+  if (data.incompleteSearch) throw new Error("Ricerca archivio incompleta. Riprova.");
+  return { files: data.files.filter((file) => file.appProperties?.ficSource).map((file) => ({ id: file.id, name: file.name, invoiceDate: file.appProperties?.ficDate })), nextPageToken: data.nextPageToken ?? null };
+}
+
 export async function listDriveInvoices(session: GoogleSession, month: string, supplier: unknown = "", pageToken = "") {
   monthQuery(month);
   supplierQuery(supplier);
