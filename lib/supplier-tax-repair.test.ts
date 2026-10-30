@@ -12,5 +12,11 @@ it("repairs only the missing GST on explicit re-import, preserving IDs, financia
 });
 it("does not overwrite identifiers or repair a different document", () => {
   expect(repairMissingSupabaseTaxId(parsed, parsed)).toBe(parsed);
-  for (const change of [{ total_amount: 99 }, { invoice_number: "RZWLOS-00008" }, { currency: "EUR" }, { invoice_date: "2026-10-19" }]) expect(repairMissingSupabaseTaxId(invoice, { ...parsed, invoice: { ...parsed.invoice, ...change } })).toBe(invoice);
+  for (const change of [{ invoice_number: "RZWLOS-00008" }, { invoice_date: "2026-10-19" }]) expect(repairMissingSupabaseTaxId(invoice, { ...parsed, invoice: { ...parsed.invoice, ...change } })).toBe(invoice);
+});
+it("repairs the tax ID on an already converted FIC expense, without changing euros", () => {
+  const euro = { ...invoice, invoice: { ...invoice.invoice, currency: "EUR", net_amount: 49.37, total_amount: 49.37 } };
+  const result = repairMissingSupabaseTaxId(euro, parsed);
+  expect(result.invoice).toEqual({ ...euro.invoice, supplier_vat: "202005760H" });
+  expect(result.processing.expenseId).toBe(123);
 });

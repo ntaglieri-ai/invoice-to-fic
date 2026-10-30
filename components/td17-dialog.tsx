@@ -17,13 +17,14 @@ async function requestTd17(body: unknown) {
 const money = (value: number) => new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(value);
 const date = (value: string) => value.split("-").reverse().join("/");
 
-export function Td17Dialog({ invoice, companyId, onClose, onCreated }: {
-  invoice: InvoiceFields; companyId: number; onClose: () => void; onCreated: (result: Td17Result) => void;
+export function Td17Dialog({ invoice, companyId, onClose, onCreated, onTaxIdConfirmed }: {
+  invoice: InvoiceFields; companyId: number; onClose: () => void; onCreated: (result: Td17Result) => void; onTaxIdConfirmed?: (value: string) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const submitted = useRef(false);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
+  const [taxId, setTaxId] = useState(invoice.supplier_vat);
   const [suppliers, setSuppliers] = useState<FicSupplier[]>([]);
   const [vats, setVats] = useState<Td17Vat[]>([]);
   const [options, setOptions] = useState<Td17Options>({ supplierId: 0, documentDate: invoice.invoice_date, vatId: -1, numeration: "/TD17", paymentMethod: "MP08" });
@@ -52,7 +53,9 @@ export function Td17Dialog({ invoice, companyId, onClose, onCreated }: {
   async function prepare() {
     setBusy(true); setError("");
     try {
-      const data = await requestTd17({ action: "preview", companyId, invoice, options, approved: true });
+      const confirmedTaxId = taxId.trim().toUpperCase();
+      const data = await requestTd17({ action: "preview", companyId, invoice: { ...invoice, supplier_vat: confirmedTaxId }, options, approved: true });
+      if (confirmedTaxId !== invoice.supplier_vat) onTaxIdConfirmed?.(confirmedTaxId);
       if (data.existing) complete(data.existing);
       else { setPreview(data); setConfirmed(false); }
     } catch (error) { setError(error instanceof Error ? error.message : "Verifica non riuscita."); }
@@ -114,6 +117,7 @@ export function Td17Dialog({ invoice, companyId, onClose, onCreated }: {
         <label className="block">Fornitore estero<select disabled={busy} className={input} value={options.supplierId || ""} onChange={(event) => setOptions({ ...options, supplierId: Number(event.target.value) })}>
           <option value="">Seleziona fornitore</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}
         </select></label>
+        <label className="block">VAT / Tax ID estero del fornitore<input className={input} disabled={busy} value={taxId} maxLength={50} placeholder="Identificativo riportato in fattura" onChange={(event) => { setTaxId(event.target.value); setError(""); if (!options.supplierId) setOptions((current) => ({ ...current, supplierId: matchExpenseSupplier(suppliers, event.target.value)?.id ?? 0 })); }}/></label>
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="block">Data TD17 (da confermare)<input type="date" disabled={busy} className={input} value={options.documentDate} onChange={(event) => setOptions({ ...options, documentDate: event.target.value })} /></label>
           <label className="block">IVA da integrare<select disabled={busy} className={input} value={options.vatId} onChange={(event) => setOptions({ ...options, vatId: Number(event.target.value) })}><option value={-1}>Seleziona aliquota</option>{vats.map((vat) => <option key={vat.id} value={vat.id}>{vat.value}% {vat.description}</option>)}</select></label>
@@ -124,7 +128,7 @@ export function Td17Dialog({ invoice, companyId, onClose, onCreated }: {
           <label>Metodo pagamento<select disabled={busy} className={input} value={options.paymentMethod} onChange={(event) => setOptions({ ...options, paymentMethod: event.target.value })}>{Array.from({ length: 23 }, (_, i) => `MP${String(i + 1).padStart(2, "0")}`).map((code) => <option key={code} value={code}>{code}{code === "MP08" ? " - Carta" : code === "MP05" ? " - Bonifico" : ""}</option>)}</select></label>
         </div></details>
         <p className="border-l-2 border-amber-400 pl-3 text-amber-800">Solo salvataggio del TD17. Nessun invio SDI e nessuna nuova spesa.</p>
-        <div className="flex justify-end"><button disabled={busy || !options.supplierId || options.vatId < 0} onClick={prepare} className="rounded-md bg-ink px-4 py-2 text-white disabled:opacity-40">{busy ? "Verifica..." : "Controlla TD17"}</button></div>
+        <div className="flex justify-end"><button disabled={busy || !taxId.trim() || !options.supplierId || options.vatId < 0} onClick={prepare} className="rounded-md bg-ink px-4 py-2 text-white disabled:opacity-40">{busy ? "Verifica..." : "Controlla TD17"}</button></div>
       </div>}
     </div>
   </dialog>;
