@@ -69,9 +69,10 @@ it("checks company access before preparing", async () => {
   expect(previewTd17).not.toHaveBeenCalled();
 });
 it("prepares without calling document creation", async () => {
+  const invoice = { supplier: "OpenAI", invoice_number: "IA8NO7NL-0095", invoice_date: "2026-08-31", currency: "EUR", net_amount: 13.21, tax_amount: 0, total_amount: 13.21, supplier_vat: "IE4143435AH" };
   vi.mocked(previewTd17).mockResolvedValue({ existing: { id: 7, alreadyExists: true, eiStatus: "sent", xmlValid: null } });
-  expect((await POST(request({ action: "preview", companyId: 123, approved: true, invoice: {}, options: {} }))).status).toBe(200);
-  expect(previewTd17).toHaveBeenCalledWith("test-token", 123, {}, {}, "owner");
+  expect((await POST(request({ action: "preview", companyId: 123, approved: true, invoice, options: {} }))).status).toBe(200);
+  expect(previewTd17).toHaveBeenCalledWith("test-token", 123, invoice, {}, "owner");
   expect(createTd17).not.toHaveBeenCalled();
 });
 it("preserves a rotated refresh token even if the operation fails", async () => {
@@ -82,6 +83,19 @@ it("preserves a rotated refresh token even if the operation fails", async () => 
   const response = await POST(request({ action: "preview", companyId: 123, approved: true }));
   expect(response.headers.get("set-cookie")).toContain("fic=sealed-rotated");
   expect(response.status).toBe(400);
+});
+it("normalizes a confirmed USD invoice before TD17 preparation", async () => {
+  const invoice = { supplier: "OpenAI", invoice_number: "USD-0018", invoice_date: "2026-09-28", currency: "USD", net_amount: 10.1, tax_amount: 0, total_amount: 10.1, supplier_vat: "IE4143435AH", eur_conversion: { rate: 0.9, date: "2026-09-28", source: "manual", confirmed_at: "2026-10-10T12:00:00Z" } };
+  vi.mocked(previewTd17).mockResolvedValue({ existing: { id: 7, alreadyExists: true, eiStatus: "not_sent", xmlValid: null } });
+  expect((await POST(request({ action: "preview", companyId: 123, approved: true, invoice, options: {} }))).status).toBe(200);
+  expect(previewTd17).toHaveBeenCalledWith("test-token", 123, expect.objectContaining({ currency: "EUR", net_amount: 9.09, total_amount: 9.09 }), {}, "owner");
+  expect(createTd17).not.toHaveBeenCalled();
+});
+it("rejects foreign invoices without confirmation and preserves VAT review guards", async () => {
+  const invoice = { supplier: "OpenAI", invoice_number: "USD-0018", invoice_date: "2026-09-28", currency: "USD", net_amount: 10.1, tax_amount: 0, total_amount: 10.1, supplier_vat: "IE4143435AH" };
+  expect((await POST(request({ action: "preview", companyId: 123, approved: true, invoice, options: {} }))).status).toBe(400);
+  expect((await POST(request({ action: "preview", companyId: 123, approved: true, invoice: { ...invoice, tax_amount: 0.01, total_amount: 10.11, eur_conversion: { rate: 0.001, date: "2026-09-28", source: "manual", confirmed_at: "2026-10-10T12:00:00Z" } }, options: {} }))).status).toBe(400);
+  expect(previewTd17).not.toHaveBeenCalled();
 });
 it("rejects oversized and malformed input", async () => {
   expect((await POST(request({ huge: "x".repeat(16000) }))).status).toBe(413);

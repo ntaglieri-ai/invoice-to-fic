@@ -17,7 +17,7 @@ export function InvoiceDetail({ item, canWrite, canTd17, pending, error, onClose
   const locked = Boolean(item.ficId || item.td17);
   const taxReview = invoiceTaxReview(item.invoice);
   const action = nextInvoiceAction(item);
-  const canAct = action === "review" ? !pending && item.status !== "duplicate" : action === "expense" ? canWrite && item.invoice.currency === "EUR" : action === "td17" ? canTd17 && Boolean(item.ficId) && item.invoice.currency === "EUR" && item.invoice.tax_amount === 0 : true;
+  const canAct = !item.not_applicable && (action === "review" ? !pending && item.status !== "duplicate" : action === "expense" ? canWrite : action === "td17" ? canTd17 && Boolean(item.ficId) && item.invoice.tax_amount === 0 : true);
   const steps = [
     { label: "Documento acquisito", done: true, detail: item.driveId ? "PDF archiviato su Drive" : item.id.startsWith("fic-") ? "Dati recuperati da Fatture in Cloud" : item.file_name },
     { label: "Spesa registrata", done: Boolean(item.ficId), detail: item.ficId ? `FIC #${item.ficId}` : "Da registrare in Fatture in Cloud" },
@@ -28,7 +28,7 @@ export function InvoiceDetail({ item, canWrite, canTd17, pending, error, onClose
   return <AppDrawer title="Dettaglio fattura" onClose={onClose} footer={<>{pending && <span className="text-xs text-amber-800">Salvataggio in corso...</span>}{primary}</>}>
     <div className="invoice-identity"><div><span className="detail-supplier">{item.invoice.supplier}</span><h3>{item.invoice.invoice_number || "Numero da verificare"}</h3><small>{displayInvoiceDate(item.invoice.invoice_date)}</small></div><strong>{invoiceAmount(item)}</strong></div>
     {error && <p role="alert" className="sf-alert alert-error">{error}</p>}
-    {taxReview && <p className="sf-alert alert-warning"><strong>IVA addebitata · Da verificare</strong><br/>{taxReview}</p>}
+    {taxReview && <p className="sf-alert alert-warning"><strong>{item.checked_at ? "Dati controllati · Gestione fiscale separata" : "IVA addebitata · Da verificare"}</strong><br/>{item.checked_at ? "L'IVA del documento resta invariata. Il controllo dei dati non abilita la creazione automatica di spesa o TD17 per questa fattura." : taxReview}</p>}
     {item.status === "duplicate" && <p className="sf-alert alert-warning">Fattura duplicata. Verifica prima di procedere.</p>}
     {item.warnings.length > 0 && <ul className="detail-warnings">{item.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>}
     <ol className="invoice-steps">{steps.map((step, index) => <li key={step.label}><span className={`step-mark ${step.done ? "step-done" : steps[index - 1]?.done ? "step-current" : ""}`}>{step.done ? <Check size={14}/> : index + 1}</span><div><strong>{step.label}</strong><small>{step.detail}</small></div></li>)}</ol>
@@ -48,6 +48,6 @@ export function InvoiceDetail({ item, canWrite, canTd17, pending, error, onClose
       {item.td17 && <button className="sf-text-button mt-3" disabled={pending} onClick={onRefresh}><RotateCcw size={14}/>Aggiorna stato FIC</button>}
     </section>
     <details className="detail-other"><summary>Altre azioni</summary><div><button className="sf-text-button" disabled={pending || !locked} onClick={onReset}><RotateCcw size={15}/>Reset riferimenti FIC</button><button className="sf-text-button sf-danger" disabled={pending} onClick={onRemove}><Trash2 size={15}/>Rimuovi dal registro</button></div></details>
-    {!canAct && action !== "fic" && !pending && <p className="sf-alert alert-warning">{action === "td17" && !item.ficId ? "Registra prima la spesa." : item.invoice.currency !== "EUR" ? "Registrazione disponibile per fatture EUR." : action === "td17" && item.invoice.tax_amount !== 0 ? "IVA origine da verificare prima del TD17." : "Verifica i dati e le autorizzazioni nelle impostazioni."}</p>}
+    {!canAct && action !== "fic" && !pending && <p className="sf-alert alert-warning">{item.not_applicable ? "Non applicabile: esclusa da conversione, spese e TD17. Premi N/A nella lista per riattivarla." : action === "td17" && !item.ficId ? "Registra prima la spesa." : action === "td17" && item.invoice.tax_amount !== 0 ? "IVA origine da verificare prima del TD17." : "Verifica i dati e le autorizzazioni nelle impostazioni."}</p>}
   </AppDrawer>;
 }

@@ -18,9 +18,15 @@ export type InvoiceFields = {
   total_amount: number | null;
   supplier_vat: string;
   customer_vat?: string;
+  eur_conversion?: EurConversion;
+  foreign_reference?: string;
 };
 
+export type EurConversion = { rate: number; date: string; source: "ECB" | "manual"; confirmed_at: string };
+
 export type ParsedInvoice = {
+  expense_acceptance?: { id: number; at: string };
+  not_applicable?: boolean;
   checked_at?: string;
   index: number;
   file_name: string;

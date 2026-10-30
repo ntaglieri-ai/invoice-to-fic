@@ -1,6 +1,7 @@
 import type { InvoiceFields, InvoiceStatus } from "./types";
 import type { HistoryInvoice } from "./invoice-history";
 import { processingKey, td17DeliveryState, type ProcessingLedger, type ProcessingRecord } from "./processing-state";
+import { cleanEurConversion } from "./invoice-conversion";
 
 export type ManagedInvoice = HistoryInvoice & { driveId?: string; processing?: ProcessingRecord };
 export type MemoryRecord = { value: ManagedInvoice | null; revision: string };
@@ -17,6 +18,8 @@ export function cleanManagedInvoice(value: unknown): ManagedInvoice {
   if (!value || typeof value !== "object") throw new Error("Dati fattura non validi.");
   const item = value as ManagedInvoice;
   const invoice = item.invoice;
+  if (item.expense_acceptance !== undefined && (!documentId(item.expense_acceptance?.id) || !text(item.expense_acceptance?.at, 40) || !Number.isFinite(Date.parse(item.expense_acceptance.at)))) throw new Error("Accettazione spesa non valida.");
+  if (item.not_applicable !== undefined && typeof item.not_applicable !== "boolean") throw new Error("Esclusione fattura non valida.");
   if (item.checked_at !== undefined && (!text(item.checked_at, 40) || !Number.isFinite(Date.parse(item.checked_at)))) throw new Error("Data controllo non valida.");
   if (!recordId(item.id) || !text(item.file_name, 200) || !Number.isSafeInteger(item.index) || item.index < 0 ||
     !invoice || !suppliers.includes(invoice.supplier) || !text(invoice.invoice_number, 200) || !text(invoice.invoice_date, 20) ||
@@ -26,18 +29,20 @@ export function cleanManagedInvoice(value: unknown): ManagedInvoice {
     !item.warnings.every((warning) => text(warning, 1000)) || (item.driveId !== undefined && !/^[a-zA-Z0-9_-]{1,200}$/.test(item.driveId))) throw new Error("Dati fattura non validi.");
   const fields: InvoiceFields = { supplier: invoice.supplier, invoice_number: invoice.invoice_number, invoice_date: invoice.invoice_date,
     currency: invoice.currency, net_amount: invoice.net_amount, tax_amount: invoice.tax_amount, total_amount: invoice.total_amount,
-    supplier_vat: invoice.supplier_vat, ...(invoice.customer_vat !== undefined ? { customer_vat: invoice.customer_vat } : {}) };
+    supplier_vat: invoice.supplier_vat, ...(invoice.customer_vat !== undefined ? { customer_vat: invoice.customer_vat } : {}),
+    ...(invoice.eur_conversion !== undefined ? { eur_conversion: cleanEurConversion(invoice.eur_conversion) } : {}) };
   let processing: ProcessingRecord | undefined;
   if (item.processing !== undefined) {
     const record = item.processing;
     if (!record || !text(record.updatedAt, 40) || !Number.isFinite(Date.parse(record.updatedAt)) ||
+      (record.expensePaymentState !== undefined && !["paid", "not_paid", "reversed", "mixed"].includes(record.expensePaymentState)) ||
       ![record.expenseId, record.td17Id].every((id) => id === undefined || documentId(id)) ||
       (record.td17EiStatus !== undefined && !text(record.td17EiStatus, 100))) throw new Error("Stati FIC non validi.");
-    processing = { updatedAt: record.updatedAt, ...(record.expenseId ? { expenseId: record.expenseId } : {}),
+    processing = { updatedAt: record.updatedAt, ...(record.expenseId ? { expenseId: record.expenseId, ...(record.expensePaymentState ? { expensePaymentState: record.expensePaymentState } : {}) } : {}),
       ...(record.td17Id ? { td17Id: record.td17Id, td17State: td17DeliveryState(record.td17EiStatus), ...(record.td17EiStatus !== undefined ? { td17EiStatus: record.td17EiStatus } : {}) } : {}) };
   }
   return { id: item.id, index: item.index, file_name: item.file_name, invoice: fields, status: item.status, confidence: item.confidence,
-    warnings: item.warnings, extracted_text_preview: "", ...(item.checked_at ? { checked_at: item.checked_at } : {}), ...(item.driveId ? { driveId: item.driveId } : {}), ...(processing ? { processing } : {}) };
+    warnings: item.warnings, extracted_text_preview: "", ...(item.checked_at ? { checked_at: item.checked_at } : {}), ...(item.expense_acceptance ? { expense_acceptance: { id: item.expense_acceptance.id, at: item.expense_acceptance.at } } : {}), ...(item.not_applicable ? { not_applicable: true } : {}), ...(item.driveId ? { driveId: item.driveId } : {}), ...(processing ? { processing } : {}) };
 }
 
 export function cleanMemoryEvent(raw: unknown): MemoryEvent {

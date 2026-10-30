@@ -5,6 +5,8 @@ import { APP_AUTH_COOKIE, verifyAppSessionCookieValue } from "@/lib/simple-auth"
 import { FIC_SESSION_COOKIE, refreshFattureInCloudSession, sealFattureInCloudSession, shouldRefreshSession, unsealFattureInCloudSession } from "@/lib/fatture-in-cloud";
 import { canWriteExpenses, createReviewedExpense, findExistingExpense, listExpenseSuppliers, readExpenseTicket, requireCompany, requireSupplier, signExpenseTicket, ticketOwner } from "@/lib/fic-expenses";
 import { hasExpenseTaxSettings, validateExpensePreparation, type ExpensePreparationOptions } from "@/lib/expense-validation";
+import { invoiceForFic } from "@/lib/invoice-conversion";
+import { invoiceErrors } from "@/lib/expense-validation";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -42,8 +44,10 @@ export async function POST(request: Request) {
     const company = await requireCompany(token, body.companyId);
     if (body.action === "suppliers") return respond({ suppliers: await listExpenseSuppliers(token, body.companyId) });
     if (body.action !== "preview" || body.approved !== true) return respond({ error: "Approva la fattura prima dell'anteprima." }, 400);
-    validateExpensePreparation(body.invoice, body.options);
-    const invoice = body.invoice;
+    const originalErrors = invoiceErrors(body.invoice);
+    if (originalErrors.length) throw new Error(originalErrors.join(" "));
+    const invoice = invoiceForFic(body.invoice);
+    validateExpensePreparation(invoice, body.options);
     requireCustomerVat(invoice, company.vat_number);
     const options = body.options as ExpensePreparationOptions;
     const supplier = await requireSupplier(token, body.companyId, invoice, options);

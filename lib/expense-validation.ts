@@ -95,7 +95,7 @@ export function buildExpensePayload(invoice: InvoiceFields, options: ExpenseOpti
     entity: { id: supplier.id, name: supplier.name },
     invoice_number: invoice.invoice_number.trim(),
     date: invoice.invoice_date,
-    description: `${invoice.supplier} - ${invoice.invoice_number.trim()}`,
+    description: `${invoice.supplier} - ${invoice.invoice_number.trim()}${invoice.foreign_reference ? ` | ${invoice.foreign_reference}` : ""}`,
     currency: { id: "EUR", exchange_rate: "1.00000" },
     amount_net: invoice.net_amount,
     amount_vat: invoice.tax_amount,

@@ -48,6 +48,12 @@ it("returns account-scoped records without OAuth credentials and persists refres
   expect(requireCompany).toHaveBeenCalledWith("mock", 17);
   expect(response.headers.get("cache-control")).toBe("no-store");
 });
+it("identifies the Google account holding shared history across computers", async () => {
+  vi.mocked(googleFetch).mockResolvedValue(Response.json({ user: { permissionId: "account17", emailAddress: "owner@example.test" } }));
+  const response = await POST(request());
+  expect(await response.json()).toEqual({ records: {}, accountId: "account17", accountEmail: "owner@example.test" });
+  expect(googleFetch).toHaveBeenCalledWith(expect.anything(), "/drive/v3/about?fields=user(permissionId,emailAddress)");
+});
 it("validates save payloads and never converts a failed read into an empty memory", async () => {
   expect((await POST(request({ companyId: 17, action: "save", event: { changes: [] } }))).status).toBe(400);
   expect(saveInvoiceMemory).not.toHaveBeenCalled();

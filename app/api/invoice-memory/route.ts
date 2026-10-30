@@ -31,15 +31,18 @@ export async function POST(request: Request) {
     const body = JSON.parse(raw);
     if (!Number.isSafeInteger(body.companyId) || body.companyId <= 0 || !["load", "save"].includes(body.action)) return reply({ error: "Richiesta non valida." }, 400);
     const event = body.action === "save" ? cleanMemoryEvent(body.event) : undefined;
-    google = await freshGoogle(storedGoogle);
-    fic = shouldRefreshSession(storedFic) ? await refreshFattureInCloudSession(storedFic) : storedFic;
+    [google, fic] = await Promise.all([freshGoogle(storedGoogle), shouldRefreshSession(storedFic) ? refreshFattureInCloudSession(storedFic) : Promise.resolve(storedFic)]);
     await requireCompany(fic.accessToken, body.companyId);
-    const records = event ? await saveInvoiceMemory(google, body.companyId, event) : (await loadInvoiceMemory(google, body.companyId)).records;
-    // Drive permissionId identifies the connected account without exposing email or OAuth credentials.
-    const about = await googleFetch(google, "/drive/v3/about?fields=user(permissionId)");
-    const accountId = (await about.json()).user?.permissionId;
-    if (typeof accountId !== "string" || !/^[a-zA-Z0-9_-]{1,200}$/.test(accountId)) throw new Error("Account Google non riconosciuto.");
-    return reply({ records, accountId });
+    // Identity lookup runs alongside memory IO, with no shared cache of private records.
+    const [records, account] = await Promise.all([
+      event ? saveInvoiceMemory(google, body.companyId, event) : loadInvoiceMemory(google, body.companyId).then((state) => state.records),
+      googleFetch(google, "/drive/v3/about?fields=user(permissionId,emailAddress)").then((response) => response.json()).then((about) => {
+        const id = about.user?.permissionId;
+        if (typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,200}$/.test(id)) throw new Error("Account Google non riconosciuto.");
+        return { accountId: id, ...(typeof about.user?.emailAddress === "string" ? { accountEmail: about.user.emailAddress } : {}) };
+      }),
+    ]);
+    return reply({ records, ...account });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Memoria online non disponibile.";
     return reply({ error: /https?:|token|Bearer|<html|JSON/i.test(message) ? "Memoria online non disponibile. Riprova o ricollega Google." : message }, error instanceof MemoryConflict ? 409 : 400);

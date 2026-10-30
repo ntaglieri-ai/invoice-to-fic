@@ -6,6 +6,7 @@ import { requireCompany, listExpenseSuppliers, findExistingExpense } from "@/lib
 import { findExistingTd17 } from "@/lib/fic-td17";
 import { normalizeIdentifier } from "@/lib/expense-validation";
 import type { InvoiceFields } from "@/lib/types";
+import { expensePaymentState, type ExpensePaymentState } from "@/lib/expense-payment-state";
 
 export const maxDuration = 60;
 export async function POST(request: Request) {
@@ -33,6 +34,7 @@ export async function POST(request: Request) {
       let recoveredExpenseId: number | undefined;
       let recoveredTd17Id: number | undefined;
       let td17EiStatus: string | undefined;
+      let paymentState: ExpensePaymentState | undefined;
       if (!record.expenseId || !record.td17Id) {
         const invoice = record.invoice;
         if (!invoice || typeof invoice.invoice_number !== "string" || invoice.invoice_number.length > 200 || typeof invoice.invoice_date !== "string" || typeof invoice.supplier_vat !== "string") throw new Error("Fattura non valida.");
@@ -48,17 +50,18 @@ export async function POST(request: Request) {
       async function exists(id: number | undefined, type: string) {
         if (id === undefined) return undefined;
         if (!Number.isSafeInteger(id) || id <= 0) throw new Error("ID non valido.");
-        const fields = type === "issued_documents" ? "id,ei_status" : "id";
+        const fields = type === "issued_documents" ? "id,ei_status" : "id,payments_list";
         const response = await fetch(`${FIC_API_BASE_URL}/c/${body.companyId}/${type}/${id}?fields=${fields}`, { headers: { Authorization: `Bearer ${session.accessToken}` }, cache: "no-store", signal: AbortSignal.timeout(20000) });
         if (response.status === 404) return false;
         if (!response.ok) throw new Error(`Verifica FIC non riuscita (${response.status}). Stati conservati.`);
         const data = await response.json();
         if (data?.data?.id !== id) throw new Error("Risposta FIC incompleta. Stati conservati.");
         if (type === "issued_documents") td17EiStatus = typeof data.data.ei_status === "string" ? data.data.ei_status : "unknown";
+        else paymentState = expensePaymentState(data.data.payments_list);
         return true;
       }
       const [expenseExists, td17Exists] = await Promise.all([exists(record.expenseId, "received_documents"), exists(record.td17Id, "issued_documents")]);
-      return { key: record.key, expenseExists, td17Exists, expenseId: recoveredExpenseId, td17Id: recoveredTd17Id, td17EiStatus };
+      return { key: record.key, expenseExists, td17Exists, expenseId: recoveredExpenseId, expensePaymentState: paymentState, td17Id: recoveredTd17Id, td17EiStatus };
     }));
     return reply({ records });
   } catch (e) {

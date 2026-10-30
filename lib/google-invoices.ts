@@ -25,10 +25,13 @@ export async function scanGoogleInvoices(session: GoogleSession, month: string, 
   if (pageToken) params.set("pageToken", pageToken);
   const page = await json<{ messages?: { id: string }[]; nextPageToken?: string }>(session, `/gmail/v1/users/me/messages?${params}`);
   const items = [];
-  for (const item of page.messages ?? []) {
-    const message = await json<MailMessage>(session, `/gmail/v1/users/me/messages/${encodeURIComponent(item.id)}?format=full`);
+  const messages = page.messages ?? [];
+  for (let offset = 0; offset < messages.length; offset += 3) {
+    const batch = await Promise.all(messages.slice(offset, offset + 3).map((item) => json<MailMessage>(session, `/gmail/v1/users/me/messages/${encodeURIComponent(item.id)}?format=full`)));
+    for (const message of batch) {
     const candidate = classifyMail(message);
     if (message.labelIds?.includes(id) && inRomeMonth(message, month) && (!supplier || candidate.supplier === supplier)) items.push(candidate);
+    }
   }
   let archiveWarning: string | undefined;
   try { await attachArchiveStatus(session, items); }

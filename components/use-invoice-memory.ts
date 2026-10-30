@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { HISTORY_KEY, readInvoiceHistory, type HistoryInvoice } from "@/lib/invoice-history";
 import { cleanMemoryEvent, memoryChanges, memoryLedger, type ManagedInvoice, type MemoryEvent, type MemoryRecords } from "@/lib/invoice-memory";
 import { PROCESSING_STORAGE_KEY, readProcessingLedger, type ProcessingLedger } from "@/lib/processing-state";
 
-type MemoryResponse = { records: MemoryRecords; accountId: string };
-type State<T> = { companyId: string; accountId: string; records: MemoryRecords; invoices: T[]; ledger: ProcessingLedger; ready: boolean };
+type MemoryResponse = { records: MemoryRecords; accountId: string; accountEmail?: string };
+type State<T> = { companyId: string; accountId: string; accountEmail?: string; records: MemoryRecords; invoices: T[]; ledger: ProcessingLedger; ready: boolean };
 type Pending = { event: MemoryEvent; submitted: MemoryRecords };
 
 async function request(companyId: string, event?: MemoryEvent): Promise<MemoryResponse> {
@@ -33,8 +33,10 @@ export function useInvoiceMemory<T extends HistoryInvoice>(companyId: string) {
   const pendingRef = useRef<Pending | null>(null);
   const recoveryKeyRef = useRef("");
   const activeRef = useRef(0);
+  const remoteReadRef = useRef(false);
   const ready = state.ready && state.companyId === companyId;
-  const dirty = ready && memoryChanges(state.records, state.invoices, state.ledger, companyId).length > 0;
+  const changes = useMemo(() => ready ? memoryChanges(state.records, state.invoices, state.ledger, companyId) : [], [ready, state.records, state.invoices, state.ledger, companyId]);
+  const dirty = changes.length > 0;
 
   useEffect(() => {
     const generation = ++activeRef.current;
@@ -57,7 +59,7 @@ export function useInvoiceMemory<T extends HistoryInvoice>(companyId: string) {
         }
         if (cancelled || activeRef.current !== generation) return;
         pendingRef.current = null;
-        setState({ companyId, accountId: result.accountId, records: result.records, invoices: values<T>(result.records), ledger: memoryLedger(result.records, companyId), ready: true });
+        setState({ companyId, accountId: result.accountId, accountEmail: result.accountEmail, records: result.records, invoices: values<T>(result.records), ledger: memoryLedger(result.records, companyId), ready: true });
         try {
           const remote = values<ManagedInvoice>(result.records);
           setLegacyCount(readInvoiceHistory(localStorage.getItem(HISTORY_KEY)).filter((item) => !result.records[item.id] && !remote.some((other) => other.invoice.supplier === item.invoice.supplier && other.invoice.invoice_number === item.invoice.invoice_number)).length);
@@ -72,12 +74,12 @@ export function useInvoiceMemory<T extends HistoryInvoice>(companyId: string) {
 
   useEffect(() => {
     if (!ready || saving || error) return;
-    const changes = memoryChanges(state.records, state.invoices, state.ledger, companyId).slice(0, 25);
-    if (!changes.length) return;
+    const batch = changes.slice(0, 25);
+    if (!batch.length) return;
     const generation = activeRef.current;
     const timer = window.setTimeout(async () => {
       setSaving(true);
-      const pending = pendingRef.current ?? { event: { version: 1 as const, operationId: crypto.randomUUID(), changes }, submitted: snapshot(state) };
+      const pending = pendingRef.current ?? { event: { version: 1 as const, operationId: crypto.randomUUID(), changes: batch }, submitted: snapshot(state) };
       pendingRef.current = pending;
       const key = outboxKey(companyId, state.accountId);
       try {
@@ -104,7 +106,7 @@ export function useInvoiceMemory<T extends HistoryInvoice>(companyId: string) {
       } finally { if (activeRef.current === generation) setSaving(false); }
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [state, companyId, ready, saving, error, retry]);
+  }, [state, changes, companyId, ready, saving, error, retry]);
 
   useEffect(() => {
     if (!dirty && !saving) return;
@@ -114,11 +116,37 @@ export function useInvoiceMemory<T extends HistoryInvoice>(companyId: string) {
   }, [dirty, saving]);
 
   const setInvoices: Dispatch<SetStateAction<T[]>> = useCallback((update) => {
-    setState((current) => ({ ...current, invoices: typeof update === "function" ? update(current.invoices) : update }));
+    setState((current) => {
+      const invoices = typeof update === "function" ? update(current.invoices) : update;
+      return invoices === current.invoices ? current : { ...current, invoices };
+    });
   }, []);
   const setLedger: Dispatch<SetStateAction<ProcessingLedger>> = useCallback((update) => {
-    setState((current) => ({ ...current, ledger: typeof update === "function" ? update(current.ledger) : update }));
+    setState((current) => {
+      const ledger = typeof update === "function" ? update(current.ledger) : update;
+      return ledger === current.ledger ? current : { ...current, ledger };
+    });
   }, []);
+
+  async function syncRemote() {
+    if (!ready || dirty || saving || error || pendingRef.current || remoteReadRef.current) return false;
+    const generation = activeRef.current;
+    remoteReadRef.current = true;
+    try {
+      const result = await request(companyId);
+      if (activeRef.current !== generation) return false;
+      if (result.accountId !== state.accountId) throw new Error("Account Google cambiato. Ricarica la memoria online dalle impostazioni.");
+      setState((current) => {
+        // Never overwrite edits made while the other computer's changes are loading.
+        if (memoryChanges(current.records, current.invoices, current.ledger, companyId).length || pendingRef.current) return current;
+        return { ...current, accountEmail: result.accountEmail, records: result.records, invoices: values<T>(result.records), ledger: memoryLedger(result.records, companyId) };
+      });
+      return true;
+    } catch (e) {
+      if (activeRef.current === generation) setError(e instanceof Error ? e.message : "Recupero online non riuscito. Dati conservati.");
+      return false;
+    } finally { remoteReadRef.current = false; }
+  }
 
   function migrateLegacy() {
     if (!ready) return;
@@ -148,6 +176,6 @@ export function useInvoiceMemory<T extends HistoryInvoice>(companyId: string) {
     setReload((value) => value + 1);
   }
   return { invoices: ready ? state.invoices : [], setInvoices, ledger: ready ? state.ledger : {}, setLedger, ready,
-    saving, pending: dirty || saving, error, legacyCount, migrateLegacy, refresh,
+    saving, pending: dirty || saving, error, legacyCount, migrateLegacy, refresh, syncRemote, accountEmail: state.accountEmail,
     retrySave: () => { setError(""); setRetry((value) => value + 1); } };
 }

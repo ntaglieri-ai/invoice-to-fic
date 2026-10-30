@@ -1,17 +1,28 @@
 import type { ParsedInvoice } from "./types";
 import { invoiceTaxReview } from "./invoice-tax-review";
 import type { Td17DeliveryState } from "./processing-state";
+import type { ExpensePaymentState } from "./expense-payment-state";
 
 export type WorkflowInvoice = ParsedInvoice & {
-  id: string; driveId?: string; ficId?: number;
+  id: string; driveId?: string; ficId?: number; expensePaymentState?: ExpensePaymentState;
   td17?: { companyId: number; id: number; state?: Td17DeliveryState; eiStatus?: string };
 };
 export type WorkflowFilter = "all" | "work" | "send" | "done";
+export function registeredExpenseCount(items: readonly WorkflowInvoice[]): number {
+  return new Set(items.filter((item) => !item.not_applicable && Number.isSafeInteger(item.ficId) && item.ficId! > 0).map((item) => item.ficId)).size;
+}
+export function pendingTd17Label(item: WorkflowInvoice): string {
+  if (item.not_applicable) return "Non applicabile";
+  if (item.ficId) return "Non inviato";
+  if (invoiceTaxReview(item.invoice)) return item.checked_at ? "Gestione separata" : "IVA · da verificare";
+  return "Da preparare";
+}
 export function newestInvoicesFirst(items: readonly WorkflowInvoice[]): WorkflowInvoice[] {
   const dateKey = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
   return [...items].sort((a, b) => dateKey(b.invoice.invoice_date).localeCompare(dateKey(a.invoice.invoice_date)) || b.invoice.invoice_number.localeCompare(a.invoice.invoice_number, "it", { numeric: true }) || a.id.localeCompare(b.id));
 }
 export function workflowStage(item: WorkflowInvoice): WorkflowFilter {
+  if (item.not_applicable) return "done";
   if (item.status === "duplicate" || item.status === "needs_review") return "work";
   if (item.td17) return item.td17.state === "sent" ? "done" : "send";
   return "work";

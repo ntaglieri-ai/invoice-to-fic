@@ -66,7 +66,7 @@ export function AcquisitionPanel({ initialMonth, invoices, enabled, onInvoice, o
     }
     setNotice(count ? `${count} fatture acquisite nel registro, nel mese della fattura.` : ""); working(false);
   }
-  return <div className="acquisition-panel"><nav className="acquisition-tabs" aria-label="Origine fatture">{[["mail", "Gmail", Mail], ["drive", "Drive", FolderOpen], ["computer", "Computer", Upload]].map(([key, label, Icon]) => {
+  return <div className="acquisition-panel"><label className="acquisition-upload acquisition-quick-upload"><Upload size={22}/><strong>Aggiungi PDF dal computer</strong><input aria-label="Aggiungi PDF dal computer" type="file" accept="application/pdf,.pdf" multiple disabled={!enabled || uploading || busy} onChange={(e) => { void onUpload(Array.from(e.target.files ?? [])); e.target.value = ""; }}/></label><nav className="acquisition-tabs" aria-label="Origine fatture">{[["mail", "Gmail", Mail], ["drive", "Drive", FolderOpen], ["computer", "Computer", Upload]].map(([key, label, Icon]) => {
     const Symbol = Icon as typeof Mail; return <button key={String(key)} aria-pressed={source === key} disabled={busy || uploading} onClick={() => { setSource(String(key)); reset(); }}><Symbol size={17}/>{String(label)}</button>;
   })}</nav>
     {!enabled && <p className="sf-alert alert-warning">Collega Google e FIC nelle impostazioni e attendi il caricamento del registro.</p>}

@@ -1,10 +1,11 @@
 import type { InvoiceFields } from "./types";
+import type { ExpensePaymentState } from "./expense-payment-state";
 
 export type Td17DeliveryState = "not_sent" | "sent";
 export function td17DeliveryState(status?: string): Td17DeliveryState {
   return ["sent", "processing", "not_delivered", "accepted", "no_response"].includes(status ?? "") ? "sent" : "not_sent";
 }
-export type ProcessingRecord = { expenseId?: number; td17Id?: number; td17State?: Td17DeliveryState; td17EiStatus?: string; updatedAt: string };
+export type ProcessingRecord = { expenseId?: number; expensePaymentState?: ExpensePaymentState; td17Id?: number; td17State?: Td17DeliveryState; td17EiStatus?: string; updatedAt: string };
 export type ProcessingLedger = Record<string, ProcessingRecord>;
 export const PROCESSING_STORAGE_KEY = "invoice-to-fic:processing:v1";
 export function processingKey(companyId: string, invoice: InvoiceFields) {

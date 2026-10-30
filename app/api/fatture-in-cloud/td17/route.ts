@@ -5,6 +5,8 @@ import { FIC_SESSION_COOKIE, refreshFattureInCloudSession, sealFattureInCloudSes
 import { listExpenseSuppliers, requireCompany, ticketOwner } from "@/lib/fic-expenses";
 import { canPrepareTd17 } from "@/lib/fic-permissions";
 import { createTd17, previewTd17, readTd17Ticket, td17Settings } from "@/lib/fic-td17";
+import { invoiceForFic } from "@/lib/invoice-conversion";
+import { invoiceErrors } from "@/lib/expense-validation";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -36,7 +38,9 @@ export async function POST(request: Request) {
     await requireCompany(token, body.companyId);
     if (body.action === "settings") return respond({ suppliers: await listExpenseSuppliers(token, body.companyId), ...await td17Settings(token, body.companyId) });
     if (body.action !== "preview" || body.approved !== true) return respond({ error: "Approva la fattura prima di preparare il TD17." }, 400);
-    return respond(await previewTd17(token, body.companyId, body.invoice, body.options, ticketOwner(auth)));
+    const originalErrors = invoiceErrors(body.invoice);
+    if (originalErrors.length) throw new Error(originalErrors.join(" "));
+    return respond(await previewTd17(token, body.companyId, invoiceForFic(body.invoice), body.options, ticketOwner(auth)));
   } catch (error) {
     return respond({ error: error instanceof Error ? error.message : "Operazione TD17 non riuscita." }, 400);
   }

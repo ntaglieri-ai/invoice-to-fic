@@ -72,7 +72,7 @@ export function buildTd17Payload(invoice: InvoiceFields, options: Td17Options, s
     use_split_payment: false,
     rivalsa: 0, cassa: 0, cassa2: 0, withholding_tax: 0, other_withholding_tax: 0, stamp_duty: 0, amount_due_discount: 0,
     ei_data: { vat_kind: "I", payment_method: options.paymentMethod },
-    items_list: [{ name: `Servizi SaaS ${invoice.supplier}`, description: `Fattura ${invoice.invoice_number} del ${invoice.invoice_date}`, qty: 1, net_price: amounts.net, vat: { id: vat.id } }],
+    items_list: [{ name: `Servizi SaaS ${invoice.supplier}`, description: `Fattura ${invoice.invoice_number} del ${invoice.invoice_date}${invoice.foreign_reference ? `; ${invoice.foreign_reference}` : ""}`, qty: 1, net_price: amounts.net, vat: { id: vat.id } }],
     payments_list: [{ amount: amounts.total, due_date: options.documentDate, status: "reversed" }],
     ei_raw: {
       FatturaElettronicaHeader: { CedentePrestatore: { DatiAnagrafici: { RegimeFiscale: "RF01" } } },

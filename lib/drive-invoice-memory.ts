@@ -85,7 +85,7 @@ export async function saveInvoiceMemory(session: GoogleSession, companyId: numbe
   const saved = await loadInvoiceMemory(session, companyId);
   if (!saved.accepted.has(event.operationId)) throw new MemoryConflict("Salvataggio non confermato. Riprova; nessun documento FIC sara duplicato.");
   // Periodic metadata checkpoints keep later reads fast. Original events are retained for recovery and concurrent writes.
-  if (saved.unfolded >= 50) {
+  if (saved.unfolded >= 10) {
     try { await writeJson(session, companyId, `memoria-${randomUUID()}.json`, { records: saved.records, accepted: [...saved.accepted], seen: [...saved.seen], files: saved.files }, "checkpoint"); }
     catch { console.warn("[invoice-memory] checkpoint deferred"); }
   }

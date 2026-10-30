@@ -5,6 +5,25 @@ const operation = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(1
 const event = (n: number, value: ManagedInvoice | null, revision: string | null = null): MemoryEvent => ({ version: 1, operationId: operation(n), changes: [{ id: invoice.id, expectedRevision: revision, value }] });
 
 describe("online managed invoices", () => {
+  it("persists the payment status verified in FIC independently of the TD17", () => {
+    const settled = cleanManagedInvoice({ ...invoice, processing: { ...invoice.processing, expensePaymentState: "reversed" } });
+    expect(replayMemory([event(1, settled)]).records[invoice.id].value?.processing?.expensePaymentState).toBe("reversed");
+    expect(settled.processing?.td17Id).toBe(456);
+    expect(() => cleanManagedInvoice({ ...invoice, processing: { ...invoice.processing, expensePaymentState: "unknown" } })).toThrow();
+  });
+  it("persists explicit expense acceptance without modifying financial fields or TD17", () => {
+    const accepted = cleanManagedInvoice({ ...invoice, expense_acceptance: { id: 123, at: "2026-10-20T18:00:00Z" } });
+    expect(replayMemory([event(1, accepted)]).records[invoice.id].value?.expense_acceptance?.id).toBe(123);
+    expect(accepted.invoice).toEqual(invoice.invoice);
+    expect(accepted.processing?.td17Id).toBe(456);
+    expect(() => cleanManagedInvoice({ ...invoice, expense_acceptance: { id: -1, at: "bad" } })).toThrow();
+  });
+  it("persists and reverses an explicit non-applicable choice", () => {
+    const excluded = cleanManagedInvoice({ ...invoice, not_applicable: true });
+    expect(replayMemory([event(1, excluded)]).records[invoice.id].value?.not_applicable).toBe(true);
+    expect(cleanManagedInvoice({ ...excluded, not_applicable: false }).not_applicable).toBeUndefined();
+    expect(() => cleanManagedInvoice({ ...invoice, not_applicable: "yes" })).toThrow();
+  });
   it("persists acknowledgement separately from fiscal approval and validates its date", () => {
     const checked = cleanManagedInvoice({ ...invoice, checked_at: "2026-10-06T09:00:00Z", status: "needs_review" });
     expect(checked.checked_at).toBe("2026-10-06T09:00:00Z");

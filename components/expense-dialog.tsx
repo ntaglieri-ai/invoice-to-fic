@@ -161,8 +161,9 @@ export function ExpenseDialog({ invoice, companyId, initialDraft, onClose, onPre
             <dt>Centro di costo</dt><dd>{EXPENSE_COST_CENTER}</dd>
             <dt>Fornitore FIC</dt><dd>{preview.supplier.name} · {preview.supplier.vat_number || "VAT non presente"}</dd>
             <dt>Data</dt><dd>{invoice.invoice_date.split("-").reverse().join("/")}</dd>
-            <dt>Imponibile / IVA</dt><dd>{invoice.net_amount?.toFixed(2)} / {invoice.tax_amount?.toFixed(2)} EUR</dd>
-            <dt>Totale</dt><dd className="font-semibold">{invoice.total_amount?.toFixed(2)} EUR</dd>
+            <dt>Imponibile / IVA</dt><dd>{preview.invoice.net_amount?.toFixed(2)} / {preview.invoice.tax_amount?.toFixed(2)} EUR</dd>
+            <dt>Totale</dt><dd className="font-semibold">{preview.invoice.total_amount?.toFixed(2)} EUR</dd>
+            {invoice.currency !== "EUR" && <><dt>Originale</dt><dd>{invoice.total_amount?.toFixed(2)} {invoice.currency}</dd><dt>Conversione</dt><dd>{preview.invoice.foreign_reference}</dd></>}
             <dt>Deducibilita costo</dt><dd>{preview.options.taxDeductibility === null ? "Da confermare" : `${preview.options.taxDeductibility}%`}</dd>
             <dt>Detraibilita IVA</dt><dd>{preview.options.vatDeductibility === null ? "Da confermare" : `${preview.options.vatDeductibility}%`}</dd>
             <dt>Pagamento</dt><dd>Non pagato · scadenza {preview.options.dueDate.split("-").reverse().join("/")}</dd>
