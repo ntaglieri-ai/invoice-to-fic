@@ -24,6 +24,7 @@ import { reconcileFicProcessing, type ProcessingVerification } from "@/lib/fic-s
 import { CurrencyConversionDialog } from "@/components/currency-conversion-dialog";
 import type { EurConversion } from "@/lib/types";
 import { repairMissingSupabaseTaxId } from "@/lib/supplier-tax-repair";
+import { repairUndatedVercel } from "@/lib/vercel-register-repair";
 
 type UiInvoice = WorkflowInvoice & { expenseDraft?: PreparedExpense };
 type FicCompany = { id: number | null; name: string | null; type: string | null; vat_number?: string | null; controlled_companies?: FicCompany[] | null };
@@ -66,6 +67,7 @@ export function InvoiceDashboard() {
   const [updated, setUpdated] = useState("");
   const [uploading, setUploading] = useState(false);
   const syncedRef = useRef(new Set<string>());
+  const reparsedVercelRef = useRef(new Set<string>());
   const lastReturnSyncRef = useRef(0);
   const companyRef = useRef(companyId);
   useEffect(() => { companyRef.current = companyId; }, [companyId]);
@@ -99,6 +101,22 @@ export function InvoiceDashboard() {
   const selected = enriched.find((item) => item.id === selectedId);
   const months = [...new Set([currentMonth(), month, ...Array.from({ length: 24 }, (_, index) => { const now = new Date(); return new Date(Date.UTC(now.getFullYear(), now.getMonth() - index, 1)).toISOString().slice(0, 7); }), ...invoices.map(invoiceMonth)])].filter((value) => value !== "all").sort().reverse();
   const locked = busy || acquiring || uploading || Boolean(operation) || Boolean(conversionId) || Boolean(paymentOperation);
+
+  const reparseVercel = useEffectEvent(async () => {
+    if (!memory.ready || memory.pending || memory.error || !googleConnected || locked || syncing) return;
+    const candidates = invoices.filter((item) => item.invoice.supplier === "Vercel" && !item.invoice.invoice_date && item.driveId && !ledger[processingKey(companyId, item.invoice)]?.expenseId && !ledger[processingKey(companyId, item.invoice)]?.td17Id && !reparsedVercelRef.current.has(`${companyId}:${item.id}`));
+    for (const item of candidates) {
+      if (companyRef.current !== companyId) return;
+      if (reparsedVercelRef.current.has(`${companyId}:${item.id}`)) continue;
+      reparsedVercelRef.current.add(`${companyId}:${item.id}`);
+      try {
+        const result: ArchivedInvoice = await post("/api/google/invoices", { action: "drive-load", fileId: item.driveId });
+        if (companyRef.current !== companyId) return;
+        setInvoices((current) => JSON.stringify(current.find((row) => row.id === item.id)?.invoice) === JSON.stringify(item.invoice) ? repairUndatedVercel(current, item.id, item.driveId!, result.invoice, companyId) : current);
+      } catch (e) { if (companyRef.current === companyId) setError(e instanceof Error ? e.message : "Rilettura delle fatture Vercel non riuscita. Dati conservati."); }
+    }
+  });
+  useEffect(() => { void reparseVercel(); }, [memory.ready, memory.pending, memory.error, googleConnected, locked, syncing, invoices, ledger, companyId]);
 
   async function refreshConnections() {
     const googleStatus = fetch("/api/google/invoices", { cache: "no-store" }).then(async (response) => {
