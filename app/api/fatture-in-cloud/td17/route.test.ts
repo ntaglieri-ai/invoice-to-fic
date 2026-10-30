@@ -5,12 +5,14 @@ vi.mock("@/lib/simple-auth", () => ({ APP_AUTH_COOKIE: "auth", verifyAppSessionC
 vi.mock("@/lib/fatture-in-cloud", () => ({ FIC_SESSION_COOKIE: "fic", unsealFattureInCloudSession: vi.fn(), shouldRefreshSession: vi.fn(), refreshFattureInCloudSession: vi.fn(), sealFattureInCloudSession: vi.fn() }));
 vi.mock("@/lib/fic-expenses", () => ({ listExpenseSuppliers: vi.fn(), requireCompany: vi.fn(), ticketOwner: () => "owner" }));
 vi.mock("@/lib/fic-td17", () => ({ createTd17: vi.fn(), previewTd17: vi.fn(), readTd17Ticket: vi.fn(), td17Settings: vi.fn() }));
+vi.mock("@/lib/fic-tax-identity", () => ({ resolveTd17TaxIdentity: vi.fn() }));
 import { cookies } from "next/headers";
 import { verifyAppSessionCookieValue } from "@/lib/simple-auth";
 import { refreshFattureInCloudSession, sealFattureInCloudSession, shouldRefreshSession, unsealFattureInCloudSession } from "@/lib/fatture-in-cloud";
 import { createTd17, previewTd17, readTd17Ticket } from "@/lib/fic-td17";
-import { requireCompany } from "@/lib/fic-expenses";
+import { listExpenseSuppliers, requireCompany } from "@/lib/fic-expenses";
 import { POST } from "./route";
+import { resolveTd17TaxIdentity } from "@/lib/fic-tax-identity";
 
 const session = { accessToken: "test-token", refreshToken: "test-refresh", expiresAt: "2099-01-01", scope: "entity.suppliers:r received_documents:a issued_documents.self_invoices:a" };
 function request(body: unknown, origin = "https://invoice.example") {
@@ -73,6 +75,17 @@ it("prepares without calling document creation", async () => {
   vi.mocked(previewTd17).mockResolvedValue({ existing: { id: 7, alreadyExists: true, eiStatus: "sent", xmlValid: null } });
   expect((await POST(request({ action: "preview", companyId: 123, approved: true, invoice, options: {} }))).status).toBe(200);
   expect(previewTd17).toHaveBeenCalledWith("test-token", 123, invoice, {}, "owner");
+  expect(createTd17).not.toHaveBeenCalled();
+});
+it("loads automatic tax identity for the invoice and its linked expense without creating documents", async () => {
+  const invoice = { supplier: "Supabase", invoice_number: "RZWLOS-00009", invoice_date: "2026-10-18", currency: "EUR", net_amount: 49.37, tax_amount: 0, total_amount: 49.37, supplier_vat: "" };
+  vi.mocked(resolveTd17TaxIdentity).mockResolvedValue({ supplierId: 8, taxId: "202005760H", source: "fic" });
+  const suppliers = [{ id: 8, name: "Supabase Pte. Ltd.", vat_number: "202005760H" }];
+  vi.mocked(listExpenseSuppliers).mockResolvedValue(suppliers);
+  const response = await POST(request({ action: "settings", companyId: 123, expenseId: 321, invoice }));
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ taxIdentity: { supplierId: 8, taxId: "202005760H", source: "fic" } });
+  expect(resolveTd17TaxIdentity).toHaveBeenCalledWith("test-token", 123, invoice, suppliers, 321);
   expect(createTd17).not.toHaveBeenCalled();
 });
 it("preserves a rotated refresh token even if the operation fails", async () => {

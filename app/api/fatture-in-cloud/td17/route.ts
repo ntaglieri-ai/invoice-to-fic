@@ -7,6 +7,7 @@ import { canPrepareTd17 } from "@/lib/fic-permissions";
 import { createTd17, previewTd17, readTd17Ticket, td17Settings } from "@/lib/fic-td17";
 import { invoiceForFic } from "@/lib/invoice-conversion";
 import { invoiceErrors } from "@/lib/expense-validation";
+import { resolveTd17TaxIdentity } from "@/lib/fic-tax-identity";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -36,7 +37,14 @@ export async function POST(request: Request) {
       return respond(await createTd17(token, readTd17Ticket(body.ticket, ticketOwner(auth))));
     }
     await requireCompany(token, body.companyId);
-    if (body.action === "settings") return respond({ suppliers: await listExpenseSuppliers(token, body.companyId), ...await td17Settings(token, body.companyId) });
+    if (body.action === "settings") {
+      const [suppliers, settings] = await Promise.all([listExpenseSuppliers(token, body.companyId), td17Settings(token, body.companyId)]);
+      if (!body.invoice) return respond({ suppliers, ...settings });
+      const errors = invoiceErrors(body.invoice);
+      if (errors.length) throw new Error(errors.join(" "));
+      const taxIdentity = await resolveTd17TaxIdentity(token, body.companyId, body.invoice, suppliers, body.expenseId);
+      return respond({ suppliers, ...settings, taxIdentity });
+    }
     if (body.action !== "preview" || body.approved !== true) return respond({ error: "Approva la fattura prima di preparare il TD17." }, 400);
     const originalErrors = invoiceErrors(body.invoice);
     if (originalErrors.length) throw new Error(originalErrors.join(" "));

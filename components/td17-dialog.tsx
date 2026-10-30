@@ -6,6 +6,7 @@ import type { InvoiceFields } from "@/lib/types";
 import type { FicSupplier } from "@/lib/expense-validation";
 import { matchExpenseSupplier } from "@/lib/expense-preferences";
 import type { Td17Options, Td17Preview, Td17Result, Td17Vat } from "@/lib/td17";
+import type { TaxIdentity } from "@/lib/fic-tax-identity";
 
 async function requestTd17(body: unknown) {
   const response = await fetch("/api/fatture-in-cloud/td17", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -17,14 +18,15 @@ async function requestTd17(body: unknown) {
 const money = (value: number) => new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(value);
 const date = (value: string) => value.split("-").reverse().join("/");
 
-export function Td17Dialog({ invoice, companyId, onClose, onCreated, onTaxIdConfirmed }: {
-  invoice: InvoiceFields; companyId: number; onClose: () => void; onCreated: (result: Td17Result) => void; onTaxIdConfirmed?: (value: string) => void;
+export function Td17Dialog({ invoice, companyId, expenseId, onClose, onCreated, onTaxIdConfirmed }: {
+  invoice: InvoiceFields; companyId: number; expenseId?: number; onClose: () => void; onCreated: (result: Td17Result) => void; onTaxIdConfirmed?: (value: string) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const submitted = useRef(false);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
   const [taxId, setTaxId] = useState(invoice.supplier_vat);
+  const [taxIdSource, setTaxIdSource] = useState<"invoice" | "fic" | "manual">("invoice");
   const [suppliers, setSuppliers] = useState<FicSupplier[]>([]);
   const [vats, setVats] = useState<Td17Vat[]>([]);
   const [options, setOptions] = useState<Td17Options>({ supplierId: 0, documentDate: invoice.invoice_date, vatId: -1, numeration: "/TD17", paymentMethod: "MP08" });
@@ -38,16 +40,19 @@ export function Td17Dialog({ invoice, companyId, onClose, onCreated, onTaxIdConf
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     let cancelled = false;
-    requestTd17({ action: "settings", companyId }).then((data: { suppliers: FicSupplier[]; vatTypes: Td17Vat[]; paymentMethod: string; warning?: string }) => {
+    requestTd17({ action: "settings", companyId, expenseId, invoice }).then((data: { suppliers: FicSupplier[]; vatTypes: Td17Vat[]; paymentMethod: string; warning?: string; taxIdentity?: TaxIdentity | null }) => {
       if (cancelled) return;
       setSuppliers(data.suppliers);
       setVats(data.vatTypes);
       setError(data.warning ?? "");
+      const identifier = data.taxIdentity?.taxId ?? invoice.supplier_vat;
+      setTaxId(identifier);
+      setTaxIdSource(data.taxIdentity?.source ?? "invoice");
       const matches = data.vatTypes.filter((vat) => vat.value === 22);
-      setOptions((current) => ({ ...current, supplierId: matchExpenseSupplier(data.suppliers, invoice.supplier_vat)?.id ?? 0, vatId: matches.length === 1 ? matches[0].id : -1, paymentMethod: data.paymentMethod }));
+      setOptions((current) => ({ ...current, supplierId: data.taxIdentity?.supplierId || matchExpenseSupplier(data.suppliers, identifier)?.id || 0, vatId: matches.length === 1 ? matches[0].id : -1, paymentMethod: data.paymentMethod }));
     }).catch((error) => { if (!cancelled) setError(error.message); }).finally(() => { if (!cancelled) setBusy(false); });
     return () => { cancelled = true; document.body.style.overflow = previousOverflow; };
-  }, [companyId, invoice]);
+  }, [companyId, expenseId, invoice]);
 
   function complete(data: Td17Result) { setResult(data); onCreated(data); }
   async function prepare() {
@@ -117,7 +122,7 @@ export function Td17Dialog({ invoice, companyId, onClose, onCreated, onTaxIdConf
         <label className="block">Fornitore estero<select disabled={busy} className={input} value={options.supplierId || ""} onChange={(event) => setOptions({ ...options, supplierId: Number(event.target.value) })}>
           <option value="">Seleziona fornitore</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}
         </select></label>
-        <label className="block">VAT / Tax ID estero del fornitore<input className={input} disabled={busy} value={taxId} maxLength={50} placeholder="Identificativo riportato in fattura" onChange={(event) => { setTaxId(event.target.value); setError(""); if (!options.supplierId) setOptions((current) => ({ ...current, supplierId: matchExpenseSupplier(suppliers, event.target.value)?.id ?? 0 })); }}/></label>
+        <div><label className="block">VAT / Tax ID estero del fornitore<input className={input} disabled={busy} value={taxId} maxLength={50} placeholder="Identificativo riportato in fattura" onChange={(event) => { setTaxId(event.target.value); setTaxIdSource("manual"); setError(""); if (!options.supplierId) setOptions((current) => ({ ...current, supplierId: matchExpenseSupplier(suppliers, event.target.value)?.id ?? 0 })); }}/></label>{taxId && taxIdSource !== "manual" && <small className="mt-1 block text-xs text-emerald-700">{taxIdSource === "fic" ? "Recuperato dall'anagrafica FIC del fornitore della spesa" : "Letto dalla fattura"}</small>}</div>
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="block">Data TD17 (da confermare)<input type="date" disabled={busy} className={input} value={options.documentDate} onChange={(event) => setOptions({ ...options, documentDate: event.target.value })} /></label>
           <label className="block">IVA da integrare<select disabled={busy} className={input} value={options.vatId} onChange={(event) => setOptions({ ...options, vatId: Number(event.target.value) })}><option value={-1}>Seleziona aliquota</option>{vats.map((vat) => <option key={vat.id} value={vat.id}>{vat.value}% {vat.description}</option>)}</select></label>
